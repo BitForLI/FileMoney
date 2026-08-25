@@ -1,0 +1,8 @@
+node_modules/
+out/
+release/
+.electron-cache/
+.npm-cache/
+*.exe
+*.blockmap
+.DS_Store
