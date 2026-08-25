@@ -20,7 +20,7 @@ import { EditorPane, type ViewMode } from './components/EditorPane'
 import { DeleteDialog, NameDialog } from './components/EntryDialog'
 import { FileTree } from './components/FileTree'
 import { SettingsPanel, type AppSettings } from './components/SettingsPanel'
-import { displayEntryName, displayLibraryPath, extractOutgoingDocumentLinks, flattenMarkdownFiles } from './lib/markdown'
+import { displayEntryName, displayLibraryPath, extractDocumentLocations, extractOutgoingDocumentLinks, flattenMarkdownFiles } from './lib/markdown'
 
 interface OpenTab {
   path: string
@@ -67,6 +67,7 @@ export default function App() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [backlinks, setBacklinks] = useState<BacklinkResult[]>([])
   const [rightLinkMode, setRightLinkMode] = useState<'backlinks' | 'outgoing'>('backlinks')
+  const [rightPanelMode, setRightPanelMode] = useState<'links' | 'outline'>('links')
   const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem('pagefold:view') as ViewMode) || 'split')
   const [jumpLine, setJumpLine] = useState<number | null>(null)
   const [settings, setSettings] = useState<AppSettings>(loadSettings)
@@ -403,6 +404,19 @@ export default function App() {
     () => activeTab ? extractOutgoingDocumentLinks(activeTab.content, activeTab.path) : [],
     [activeTab?.content, activeTab?.path]
   )
+  const outline = useMemo(
+    () => {
+      if (!activeTab) return []
+      const lines = activeTab.content.split(/\r?\n/)
+      return extractDocumentLocations(activeTab.content)
+        .filter((location) => location.kind === 'heading')
+        .map((location) => ({
+          ...location,
+          level: lines[location.line - 1]?.match(/^(#{1,6})\s/)?.[1].length ?? 1
+        }))
+    },
+    [activeTab?.content]
+  )
 
   if (!workspace) return <main className="library-loading"><span>P</span><p>Preparing your library…</p><button onClick={() => void loadInitialWorkspace()}>Reload</button></main>
 
@@ -534,18 +548,30 @@ export default function App() {
             event.preventDefault()
           }}
         />
-        <div className="right-heading"><h3>Links</h3><button className="icon-button" onClick={() => setRightPanelOpen(false)} aria-label="Close links panel"><X size={16} /></button></div>
-        <div className="connection-tabs">
-          <button className={rightLinkMode === 'backlinks' ? 'active' : ''} onClick={() => setRightLinkMode('backlinks')}>Backlinks <span>{backlinks.length}</span></button>
-          <button className={rightLinkMode === 'outgoing' ? 'active' : ''} onClick={() => setRightLinkMode('outgoing')}>Outgoing <span>{outgoingLinks.length}</span></button>
+        <div className="right-heading"><h3>{rightPanelMode === 'links' ? 'Links' : 'Outline'}</h3><button className="icon-button" onClick={() => setRightPanelOpen(false)} aria-label="Close links panel"><X size={16} /></button></div>
+        <div className="right-panel-tabs">
+          <button className={rightPanelMode === 'links' ? 'active' : ''} onClick={() => setRightPanelMode('links')}>Links</button>
+          <button className={rightPanelMode === 'outline' ? 'active' : ''} onClick={() => setRightPanelMode('outline')}>Outline <span>{outline.length}</span></button>
         </div>
-        <div className="connection-list backlink-list">
-          {!activePath ? <div className="backlink-empty">No note selected</div> : rightLinkMode === 'backlinks' ? (
-            backlinks.length === 0 ? <div className="backlink-empty"><Hash size={19} />No backlinks</div> : backlinks.map((link, index) => <button key={`${link.path}-${link.line}-${index}`} onClick={() => void openFile(link.path, link.line)}><span><Link2 size={13} />{link.name.replace(/\.md$/i, '')}</span><small>{displayLibraryPath(link.path)} · Line {link.line}</small></button>)
-          ) : (
-            outgoingLinks.length === 0 ? <div className="backlink-empty"><ArrowUpRight size={19} />No outgoing links</div> : outgoingLinks.map((link) => <button key={`${link.kind}-${link.target}`} onClick={() => openWiki(link.target)}><span><ArrowUpRight size={13} />{link.label}</span><p>{displayLibraryPath(link.target)}</p><small>Line {link.line}</small></button>)
-          )}
-        </div>
+        {rightPanelMode === 'links' ? (
+          <>
+            <div className="connection-tabs">
+              <button className={rightLinkMode === 'backlinks' ? 'active' : ''} onClick={() => setRightLinkMode('backlinks')}>Backlinks <span>{backlinks.length}</span></button>
+              <button className={rightLinkMode === 'outgoing' ? 'active' : ''} onClick={() => setRightLinkMode('outgoing')}>Outgoing <span>{outgoingLinks.length}</span></button>
+            </div>
+            <div className="connection-list backlink-list">
+              {!activePath ? <div className="backlink-empty">No note selected</div> : rightLinkMode === 'backlinks' ? (
+                backlinks.length === 0 ? <div className="backlink-empty"><Hash size={19} />No backlinks</div> : backlinks.map((link, index) => <button key={`${link.path}-${link.line}-${index}`} onClick={() => void openFile(link.path, link.line)}><span><Link2 size={13} />{link.name.replace(/\.md$/i, '')}</span><small>{displayLibraryPath(link.path)} · Line {link.line}</small></button>)
+              ) : (
+                outgoingLinks.length === 0 ? <div className="backlink-empty"><ArrowUpRight size={19} />No outgoing links</div> : outgoingLinks.map((link) => <button key={`${link.kind}-${link.target}`} onClick={() => openWiki(link.target)}><span><ArrowUpRight size={13} />{link.label}</span><p>{displayLibraryPath(link.target)}</p><small>Line {link.line}</small></button>)
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="outline-list">
+            {!activePath ? <div className="backlink-empty">No note selected</div> : outline.length === 0 ? <div className="backlink-empty">No headings</div> : outline.map((heading) => <button key={`${heading.line}-${heading.label}`} className={`outline-level-${heading.level}`} onClick={() => void openFile(activePath, heading.line)}><span>{heading.label}</span><small>Line {heading.line}</small></button>)}
+          </div>
+        )}
       </aside>
 
       {settingsOpen && <SettingsPanel settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}

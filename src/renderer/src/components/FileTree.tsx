@@ -5,7 +5,6 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
-  Layers3,
   MoreHorizontal,
   Pencil,
   Trash2
@@ -173,8 +172,6 @@ function SectionGroup({ entry, index, props }: { entry: TreeEntry; index: number
           if (event.key === 'Enter' || event.key === ' ') { props.onSelect(entry); setOpen((value) => !value) }
         }}
       >
-        <span className="section-index">{String(index + 1).padStart(2, '0')}</span>
-        <Layers3 size={15} />
         <strong>{displayEntryName(entry.name)}</strong>
         <ChevronRight className={`section-chevron ${open ? 'is-open' : ''}`} size={14} />
         <CreateButtons parent={entry.path} props={props} />
