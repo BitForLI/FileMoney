@@ -42,6 +42,8 @@ export interface MarkdownImportInput {
 
 export interface WorkspaceApi {
   getWorkspace: () => Promise<WorkspaceSnapshot | null>
+  chooseWorkspaceFolder: () => Promise<WorkspaceSnapshot | null>
+  useDefaultWorkspace: () => Promise<WorkspaceSnapshot>
   refreshTree: () => Promise<TreeEntry[]>
   readFile: (relativePath: string) => Promise<string>
   writeFile: (relativePath: string, content: string) => Promise<void>
@@ -55,6 +57,7 @@ export interface WorkspaceApi {
   saveAttachment: (input: AttachmentInput) => Promise<AttachmentResult>
   readClipboardText: () => Promise<string>
   writeClipboardText: (text: string) => Promise<void>
+  onWorkspaceChanged: (callback: () => void) => () => void
   onPrepareClose: (callback: () => void) => () => void
   finishClose: () => Promise<void>
 }

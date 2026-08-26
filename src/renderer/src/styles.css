@@ -543,6 +543,12 @@ body.is-resizing-split, body.is-resizing-split * { cursor: col-resize !important
 .theme-options button { display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 13px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); font: 13px 'Pagefold Serif', serif; cursor: pointer; }
 .theme-options button.selected { border-color: var(--accent); box-shadow: inset 0 -2px var(--accent); }
 .setting-group input[type='range'] { width: 100%; accent-color: var(--accent); }
+.library-location-setting > p { margin: -2px 0 11px; color: var(--ink-soft); font-size: 11px; line-height: 1.5; }
+.library-location-setting > code { display: block; overflow: hidden; padding: 9px 10px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink-soft); background: var(--paper); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.library-location-actions { display: flex; gap: 8px; margin-top: 10px; }
+.library-location-actions button { display: inline-flex; height: 34px; align-items: center; gap: 7px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--ink); background: var(--paper); font-size: 11px; cursor: pointer; }
+.library-location-actions button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.library-location-actions button:disabled { cursor: wait; opacity: .5; }
 .setting-row { display: flex; align-items: center; justify-content: space-between; padding-top: 20px; }
 .setting-row label { margin: 0 0 4px; }
 .setting-row p { margin: 0; color: var(--ink-soft); font: 12px 'Pagefold Serif', serif; }

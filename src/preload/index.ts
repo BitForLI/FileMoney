@@ -3,6 +3,8 @@ import type { AttachmentInput, EntryType, MarkdownImportInput, WorkspaceApi } fr
 
 const api: WorkspaceApi = {
   getWorkspace: () => ipcRenderer.invoke('workspace:get'),
+  chooseWorkspaceFolder: () => ipcRenderer.invoke('workspace:choose-folder'),
+  useDefaultWorkspace: () => ipcRenderer.invoke('workspace:use-default'),
   refreshTree: () => ipcRenderer.invoke('tree:refresh'),
   readFile: (relativePath) => ipcRenderer.invoke('file:read', relativePath),
   writeFile: (relativePath, content) => ipcRenderer.invoke('file:write', relativePath, content),
@@ -16,6 +18,11 @@ const api: WorkspaceApi = {
   saveAttachment: (input: AttachmentInput) => ipcRenderer.invoke('attachment:save', input),
   readClipboardText: () => ipcRenderer.invoke('clipboard:read-text'),
   writeClipboardText: (text: string) => ipcRenderer.invoke('clipboard:write-text', text),
+  onWorkspaceChanged: (callback) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('workspace:changed', listener)
+    return () => ipcRenderer.removeListener('workspace:changed', listener)
+  },
   onPrepareClose: (callback) => {
     const listener = (): void => callback()
     ipcRenderer.on('window:prepare-close', listener)

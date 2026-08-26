@@ -1,4 +1,5 @@
-import { app, BrowserWindow, clipboard, ipcMain, net, protocol, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, shell, type OpenDialogOptions } from 'electron'
+import { watch, type FSWatcher } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -18,13 +19,25 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 const TEXT_EXTENSIONS = new Set(['.md', '.markdown', '.txt'])
-const IGNORED_FOLDERS = new Set(['.git', '.assets', '.pagefold-initialized', '.pagefold-section', 'node_modules', '.DS_Store'])
-const RESERVED_NAMES = new Set(['.git', '.assets', '.pagefold-initialized', '.pagefold-section', '.ds_store', 'node_modules'])
+const IGNORED_FOLDERS = new Set(['.git', '.assets', '.pagefold-initialized', '.pagefold-section', '.stfolder', '.stversions', 'node_modules', '.DS_Store'])
+const RESERVED_NAMES = new Set(['.git', '.assets', '.pagefold-initialized', '.pagefold-section', '.stfolder', '.stversions', '.ds_store', 'node_modules'])
 const closeReadyWindows = new WeakSet<BrowserWindow>()
 let workspaceRoot: string | null = null
+let workspaceWatcher: FSWatcher | null = null
+let workspaceChangeTimer: ReturnType<typeof setTimeout> | null = null
 
-async function initializeLibrary(): Promise<void> {
-  workspaceRoot = path.join(app.getPath('userData'), 'vault')
+function defaultWorkspaceRoot(): string {
+  return path.join(app.getPath('userData'), 'vault')
+}
+
+function workspaceConfigPath(): string {
+  return path.join(app.getPath('userData'), 'workspace.json')
+}
+
+async function prepareWorkspace(root: string): Promise<void> {
+  const resolvedRoot = path.resolve(root)
+  if (resolvedRoot === path.parse(resolvedRoot).root) throw new Error('Choose a dedicated folder instead of the drive root')
+  workspaceRoot = resolvedRoot
   await fs.mkdir(workspaceRoot, { recursive: true })
   const marker = path.join(workspaceRoot, '.pagefold-initialized')
   try {
@@ -40,6 +53,60 @@ async function initializeLibrary(): Promise<void> {
   } catch {
     // Existing libraries do not need a default section.
   }
+}
+
+async function persistWorkspaceRoot(root: string): Promise<void> {
+  await fs.writeFile(workspaceConfigPath(), JSON.stringify({ rootPath: root }, null, 2), 'utf8')
+}
+
+async function initializeLibrary(): Promise<void> {
+  let configuredRoot = defaultWorkspaceRoot()
+  try {
+    const configured = JSON.parse(await fs.readFile(workspaceConfigPath(), 'utf8')) as { rootPath?: unknown }
+    if (typeof configured.rootPath === 'string' && path.isAbsolute(configured.rootPath)) configuredRoot = configured.rootPath
+  } catch {
+    // The default library remains available when no custom folder is configured.
+  }
+  try {
+    await prepareWorkspace(configuredRoot)
+  } catch {
+    await prepareWorkspace(defaultWorkspaceRoot())
+  }
+}
+
+function broadcastWorkspaceChanged(): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.webContents.isDestroyed()) window.webContents.send('workspace:changed')
+  }
+}
+
+function startWorkspaceWatcher(): void {
+  workspaceWatcher?.close()
+  workspaceWatcher = null
+  if (workspaceChangeTimer) clearTimeout(workspaceChangeTimer)
+  workspaceChangeTimer = null
+  const root = requireWorkspace()
+  try {
+    workspaceWatcher = watch(root, { recursive: true }, (_event, fileName) => {
+      const normalized = String(fileName ?? '').replaceAll('\\', '/')
+      if (normalized.split('/').some((part) => IGNORED_FOLDERS.has(part))) return
+      if (workspaceChangeTimer) clearTimeout(workspaceChangeTimer)
+      workspaceChangeTimer = setTimeout(broadcastWorkspaceChanged, 650)
+    })
+    workspaceWatcher.on('error', () => {
+      workspaceWatcher?.close()
+      workspaceWatcher = null
+    })
+  } catch {
+    // Manual refresh remains available if a platform cannot watch the selected folder.
+  }
+}
+
+async function switchWorkspace(root: string): Promise<WorkspaceSnapshot> {
+  await prepareWorkspace(root)
+  await persistWorkspaceRoot(requireWorkspace())
+  startWorkspaceWatcher()
+  return snapshot()
 }
 
 function requireWorkspace(): string {
@@ -244,6 +311,18 @@ function createWindow(): void {
 
 function registerIpc(): void {
   ipcMain.handle('workspace:get', snapshot)
+  ipcMain.handle('workspace:choose-folder', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const options: OpenDialogOptions = {
+      title: 'Choose Pagefold library folder',
+      buttonLabel: 'Use this folder',
+      properties: ['openDirectory', 'createDirectory']
+    }
+    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+    if (result.canceled || !result.filePaths[0]) return null
+    return switchWorkspace(result.filePaths[0])
+  })
+  ipcMain.handle('workspace:use-default', () => switchWorkspace(defaultWorkspaceRoot()))
   ipcMain.handle('tree:refresh', async () => readTree(requireWorkspace()))
   ipcMain.handle('file:read', async (_event, relativePath: string) => {
     const absolute = resolveInWorkspace(relativePath)
@@ -367,6 +446,7 @@ function registerIpc(): void {
 app.whenReady().then(async () => {
   await initializeLibrary()
   registerIpc()
+  startWorkspaceWatcher()
   protocol.handle('vault', async (request) => {
     const url = new URL(request.url)
     const relativePath = url.searchParams.get('path') ?? ''
@@ -384,4 +464,9 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', () => {
+  workspaceWatcher?.close()
+  if (workspaceChangeTimer) clearTimeout(workspaceChangeTimer)
 })

@@ -1,4 +1,4 @@
-import { Moon, Sun, X } from 'lucide-react'
+import { FolderSync, Moon, RotateCcw, Sun, X } from 'lucide-react'
 
 export interface AppSettings {
   theme: 'light' | 'dark'
@@ -8,17 +8,30 @@ export interface AppSettings {
 
 interface SettingsPanelProps {
   settings: AppSettings
+  workspacePath: string
+  workspaceBusy: boolean
   onChange: (settings: AppSettings) => void
+  onChooseWorkspace: () => void
+  onUseDefaultWorkspace: () => void
   onClose: () => void
 }
 
-export function SettingsPanel({ settings, onChange, onClose }: SettingsPanelProps) {
+export function SettingsPanel({ settings, workspacePath, workspaceBusy, onChange, onChooseWorkspace, onUseDefaultWorkspace, onClose }: SettingsPanelProps) {
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <section className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="settings-heading">
           <div><span className="eyebrow">WORKSPACE</span><h2 id="settings-title">Reading & Appearance</h2></div>
           <button className="icon-button" onClick={onClose} aria-label="Close settings"><X size={18} /></button>
+        </div>
+        <div className="setting-group library-location-setting">
+          <label>Library location</label>
+          <p>Choose a local folder managed by OneDrive, Dropbox, or Syncthing. Existing libraries are not moved or deleted.</p>
+          <code title={workspacePath}>{workspacePath}</code>
+          <div className="library-location-actions">
+            <button disabled={workspaceBusy} onClick={onChooseWorkspace}><FolderSync size={15} />Choose folder</button>
+            <button disabled={workspaceBusy} onClick={onUseDefaultWorkspace}><RotateCcw size={14} />Use default</button>
+          </div>
         </div>
         <div className="setting-group">
           <label>Theme</label>

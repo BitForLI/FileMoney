@@ -82,6 +82,7 @@ export default function App() {
   const [jumpLine, setJumpLine] = useState<number | null>(null)
   const [settings, setSettings] = useState<AppSettings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [toast, setToast] = useState('')
   const [nameDialog, setNameDialog] = useState<NameDialogState | null>(null)
   const [dialogBusy, setDialogBusy] = useState(false)
@@ -254,6 +255,10 @@ export default function App() {
     })
   }), [])
 
+  useEffect(() => window.pagefold.onWorkspaceChanged(() => {
+    void reconcileExternalWorkspaceChange()
+  }), [workspace?.rootPath])
+
   useEffect(() => {
     function keyboard(event: KeyboardEvent): void {
       if ((event.ctrlKey || event.metaKey) && event.key === ',') {
@@ -272,6 +277,63 @@ export default function App() {
   async function refreshTree(): Promise<void> {
     const nextTree = await window.pagefold.refreshTree()
     setTree(nextTree)
+  }
+
+  async function reconcileExternalWorkspaceChange(): Promise<void> {
+    try {
+      const nextWorkspace = await window.pagefold.getWorkspace()
+      if (!nextWorkspace || nextWorkspace.rootPath !== workspace?.rootPath) return
+      setWorkspace(nextWorkspace)
+      setTree(nextWorkspace.tree)
+      let conflictCount = 0
+      let removedCount = 0
+      const reconciled = (await Promise.all(tabsRef.current.map(async (tab) => {
+        try {
+          const diskContent = await window.pagefold.readFile(tab.path)
+          if (diskContent === tab.savedContent) return tab
+          if (tab.content === tab.savedContent) return { ...tab, content: diskContent, savedContent: diskContent }
+          clearTimeout(saveTimers.current[tab.path])
+          delete saveTimers.current[tab.path]
+          saveVersions.current[tab.path] = (saveVersions.current[tab.path] ?? 0) + 1
+          setSaveErrors((current) => ({ ...current, [tab.path]: true }))
+          conflictCount += 1
+          return tab
+        } catch {
+          if (tab.content !== tab.savedContent) {
+            conflictCount += 1
+            return tab
+          }
+          removedCount += 1
+          return null
+        }
+      }))).filter((tab): tab is OpenTab => tab !== null)
+      tabsRef.current = reconciled
+      setTabs(reconciled)
+      setActivePath((current) => current && reconciled.some((tab) => tab.path === current) ? current : reconciled[0]?.path ?? null)
+      setBacklinkRevision((current) => current + 1)
+      if (conflictCount) notify(`${conflictCount} open ${conflictCount === 1 ? 'note has' : 'notes have'} local edits and was not overwritten by a synced change.`)
+      else if (removedCount) notify(`${removedCount} open ${removedCount === 1 ? 'note was' : 'notes were'} removed by external sync.`)
+    } catch {
+      notify('Could not refresh changes from the sync folder.')
+    }
+  }
+
+  async function changeWorkspace(source: 'folder' | 'default'): Promise<void> {
+    if (!await flushAllTabs()) return
+    setWorkspaceBusy(true)
+    try {
+      const next = source === 'folder'
+        ? await window.pagefold.chooseWorkspaceFolder()
+        : await window.pagefold.useDefaultWorkspace()
+      if (!next) return
+      await activateWorkspace(next)
+      setSaveErrors({})
+      notify(source === 'folder' ? 'Library folder changed.' : 'Default library restored.')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not change the library folder.')
+    } finally {
+      setWorkspaceBusy(false)
+    }
   }
 
   async function persistContent(path: string, content: string, version: number): Promise<boolean> {
@@ -652,7 +714,7 @@ export default function App() {
         )}
       </aside>
 
-      {settingsOpen && <SettingsPanel settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsPanel settings={settings} workspacePath={workspace.rootPath} workspaceBusy={workspaceBusy} onChange={setSettings} onChooseWorkspace={() => void changeWorkspace('folder')} onUseDefaultWorkspace={() => void changeWorkspace('default')} onClose={() => { if (!workspaceBusy) setSettingsOpen(false) }} />}
       {searchOpen && (
         <div className="modal-backdrop search-dialog-backdrop" onMouseDown={() => setSearchOpen(false)}>
           <section className="search-dialog" role="dialog" aria-modal="true" aria-label="Search library" onMouseDown={(event) => event.stopPropagation()}>

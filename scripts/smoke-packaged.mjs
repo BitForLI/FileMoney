@@ -86,6 +86,8 @@ async function inspectDom(webSocketDebuggerUrl) {
           let formatToolbarRemoved = false
           let searchDialogAvailable = false
           let deleteConfirmationRemoved = false
+          let workspaceFolderControls = false
+          let workspaceWatchEvent = false
           let treeLabelsEnglish = false
           let treeLabelFontReadable = false
           let tempPath = null
@@ -106,6 +108,11 @@ async function inspectDom(webSocketDebuggerUrl) {
             collisionSource = await window.pagefold.createEntry('', 'file', '__pagefold-source-' + collisionStamp)
             collisionTarget = await window.pagefold.createEntry('', 'file', '__pagefold-target-' + collisionStamp)
             try { await window.pagefold.renameEntry(collisionSource, collisionTarget) } catch { renameCollisionRejected = true }
+            const stopWatching = window.pagefold.onWorkspaceChanged(() => { workspaceWatchEvent = true })
+            const watchPath = await window.pagefold.createEntry('', 'file', '__pagefold-watch-' + Date.now())
+            await new Promise((resolve) => setTimeout(resolve, 1100))
+            await window.pagefold.deleteEntry(watchPath)
+            stopWatching()
           } catch (error) {
             ipcError = String(error)
           } finally {
@@ -211,6 +218,12 @@ async function inspectDom(webSocketDebuggerUrl) {
           await new Promise((resolve) => setTimeout(resolve, 80))
           searchDialogAvailable = Boolean(document.querySelector('.search-dialog input'))
           document.querySelector('.search-dialog .icon-button')?.click()
+          document.querySelector('.library-create-buttons button[aria-label="Settings"]')?.click()
+          await new Promise((resolve) => setTimeout(resolve, 80))
+          workspaceFolderControls = Boolean(document.querySelector('.library-location-setting code')?.textContent?.trim()
+            && Array.from(document.querySelectorAll('.library-location-actions button')).some((button) => button.textContent?.includes('Choose folder'))
+            && Array.from(document.querySelectorAll('.library-location-actions button')).some((button) => button.textContent?.includes('Use default')))
+          document.querySelector('.settings-heading .icon-button')?.click()
           deleteConfirmationRemoved = document.querySelector('.delete-dialog') === null
           let editor = document.querySelector('textarea[aria-label="Markdown editor"]')
           if (!editor) {
@@ -314,6 +327,8 @@ async function inspectDom(webSocketDebuggerUrl) {
             formatToolbarRemoved,
             searchDialogAvailable,
             deleteConfirmationRemoved,
+            workspaceFolderControls,
+            workspaceWatchEvent,
             treeLabelsEnglish,
             treeLabelFontReadable,
             createDialog,
@@ -348,7 +363,7 @@ try {
   const sectionChecksFailed = state.sections > 0 && (!state.sectionOnlyHighlight || !state.sectionSelectionColors)
   const populatedLibraryChecksFailed = state.workspaceEntries > 0 && !state.activeNoteTabSync
   const linkLocationChecksFailed = state.linkResults > 0 && !state.linkLocationPicker
-  if (!state.hasLibraryText || !state.rootNoteRoundTrip || !state.invalidExtensionRejected || !state.deletedFileWriteRejected || !state.renameCollisionRejected || !state.dragDropImported || !state.dropTargetHighlighted || folderChecksFailed || !state.mathRendered || !state.mathSubscriptScaled || sectionChecksFailed || !state.plainNoteRows || !state.previewContextMenuEnabled || !state.contextMenuPositioned || !state.previewLinkPicker || populatedLibraryChecksFailed || linkLocationChecksFailed || !state.splitResizerEnabled || !state.formatToolbarRemoved || !state.searchDialogAvailable || !state.deleteConfirmationRemoved || !state.treeLabelsEnglish || !state.treeLabelFontReadable || state.rootCreateButtons !== 5 || !state.createDialog || !state.createInputFocused || !state.contextMenuItems.includes('Link to document') || !state.contextMenuItems.includes('Paste') || !state.linkPicker) {
+  if (!state.hasLibraryText || !state.rootNoteRoundTrip || !state.invalidExtensionRejected || !state.deletedFileWriteRejected || !state.renameCollisionRejected || !state.dragDropImported || !state.dropTargetHighlighted || folderChecksFailed || !state.mathRendered || !state.mathSubscriptScaled || sectionChecksFailed || !state.plainNoteRows || !state.previewContextMenuEnabled || !state.contextMenuPositioned || !state.previewLinkPicker || populatedLibraryChecksFailed || linkLocationChecksFailed || !state.splitResizerEnabled || !state.formatToolbarRemoved || !state.searchDialogAvailable || !state.deleteConfirmationRemoved || !state.workspaceFolderControls || !state.workspaceWatchEvent || !state.apiKeys.includes('chooseWorkspaceFolder') || !state.apiKeys.includes('onWorkspaceChanged') || !state.treeLabelsEnglish || !state.treeLabelFontReadable || state.rootCreateButtons !== 5 || !state.createDialog || !state.createInputFocused || !state.contextMenuItems.includes('Link to document') || !state.contextMenuItems.includes('Paste') || !state.linkPicker) {
     throw new Error(`The library interface is incomplete: ${JSON.stringify(state)}`)
   }
   console.log(JSON.stringify(state))
