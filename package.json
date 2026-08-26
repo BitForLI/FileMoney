@@ -1,6 +1,6 @@
 {
   "name": "pagefold",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Pagefold: a lightweight Markdown desktop app",
   "author": "Pagefold",
@@ -9,7 +9,7 @@
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "icon": "node scripts/generate-icon.mjs",
-    "dist:win": "npm run icon && npm run build && electron-builder --win nsis --x64",
+    "dist:win": "npm run icon && npm run build && electron-builder --win nsis --x64 --publish never",
     "smoke:packaged": "node scripts/smoke-packaged.mjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
