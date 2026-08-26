@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { DragEvent } from 'react'
+import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
-import { Bold, Braces, ChevronLeft, ClipboardPaste, Code2, Columns2, Copy, Eye, Heading1, Highlighter, Italic, Link2, List as ListIcon, Palette, PenLine, Quote, Scissors, Search, Strikethrough, TextSelect, Type } from 'lucide-react'
+import { Braces, ChevronLeft, ClipboardPaste, Columns2, Copy, Eye, Link2, PenLine, Scissors, Search, TextSelect, Unlink, X } from 'lucide-react'
 import type { TreeEntry } from '../../../shared/types'
 import {
   buildDocumentJumpTarget,
@@ -12,6 +14,8 @@ import {
   displayEntryName,
   displayLibraryPath,
   extractDocumentLocations,
+  extractEditableDocumentLinks,
+  findDocumentLinkAtOffset,
   findSourceTextRange,
   findWikiMatch,
   flattenMarkdownFiles,
@@ -24,22 +28,81 @@ import type { DocumentLocation } from '../lib/markdown'
 
 export type ViewMode = 'edit' | 'split' | 'preview'
 
+const CONTEXT_MENU_WIDTH = 176
+const CONTEXT_MENU_HEIGHT = 200
+const LINK_CONTEXT_MENU_HEIGHT = 234
+const CONTEXT_MENU_EDGE_GAP = 8
+
+function contextMenuPosition(clientX: number, clientY: number, existingLink = false): { x: number; y: number } {
+  const menuHeight = existingLink ? LINK_CONTEXT_MENU_HEIGHT : CONTEXT_MENU_HEIGHT
+  return {
+    x: Math.max(CONTEXT_MENU_EDGE_GAP, Math.min(clientX, window.innerWidth - CONTEXT_MENU_WIDTH - CONTEXT_MENU_EDGE_GAP)),
+    y: Math.max(CONTEXT_MENU_EDGE_GAP, Math.min(clientY, window.innerHeight - menuHeight - CONTEXT_MENU_EDGE_GAP))
+  }
+}
+
 interface EditorPaneProps {
   path: string
   content: string
+  openDocuments: Array<{ path: string; name: string; content: string }>
   tree: TreeEntry[]
   recentPaths: string[]
   mode: ViewMode
   jumpLine: number | null
   onModeChange: (mode: ViewMode) => void
-  onChange: (content: string) => void
+  onChange: (path: string, content: string) => void
   onWikiOpen: (target: string) => void
-  onAttach: (file: File) => Promise<string>
+  onOpenInPane: (path: string, pane: 'left' | 'right') => void
+  onAttach: (notePath: string, file: File) => Promise<string>
 }
 
 interface SelectionRange {
   start: number
   end: number
+}
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function DocumentPreview({ path, content, onWikiOpen, onDrop, onClose }: { path: string; content: string; onWikiOpen: (target: string) => void; onDrop: (event: DragEvent<HTMLElement>) => void; onClose: () => void }) {
+  return (
+    <article className="markdown-preview document-preview" aria-label={`Preview of ${path}`} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
+      <button className="document-close" onClick={onClose} title="Remove from preview" aria-label={`Remove ${path} from preview`}><X size={13} /></button>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: false }]]}
+        components={{
+          a: ({ href, children }) => {
+            const external = Boolean(href && /^https?:/i.test(href))
+            return <a href={href} target={external ? '_blank' : undefined} rel={external ? 'noreferrer' : undefined} onClick={(event) => {
+              if (!href || external) return
+              if (href.startsWith('#wiki:')) {
+                event.preventDefault()
+                onWikiOpen(safeDecode(href.slice(6)))
+              } else if (/\.(md|markdown|txt)(?:#.*)?$/i.test(href)) {
+                event.preventDefault()
+                const [linkedPath, fragment] = href.split('#', 2)
+                const resolved = resolveRelativeNotePath(path, safeDecode(linkedPath))
+                onWikiOpen(fragment ? `${resolved}#${safeDecode(fragment)}` : resolved)
+              }
+            }}>{children}</a>
+          },
+          img: ({ src, alt }) => {
+            const resolved = resolveRelativeNotePath(path, src ?? '')
+            const imageSource = /^(data:|blob:|https?:)/i.test(resolved) ? resolved : `vault:///asset?path=${encodeURIComponent(resolved)}`
+            return <img src={imageSource} alt={alt ?? ''} />
+          }
+        }}
+      >
+        {renderableMarkdown(content)}
+      </ReactMarkdown>
+    </article>
+  )
 }
 
 interface ContextMenuState extends SelectionRange {
@@ -48,6 +111,7 @@ interface ContextMenuState extends SelectionRange {
   selectedText: string
   source: 'editor' | 'preview'
   editable: boolean
+  existingLink: boolean
 }
 
 export function LocationMarkdown({ source, onDoubleClick }: { source: string; onDoubleClick?: () => void }) {
@@ -79,24 +143,64 @@ export function LocationMarkdown({ source, onDoubleClick }: { source: string; on
   )
 }
 
-export function EditorPane({ path, content, tree, recentPaths, mode, jumpLine, onModeChange, onChange, onWikiOpen, onAttach }: EditorPaneProps) {
+export function EditorPane({ path, content, openDocuments, tree, recentPaths, mode, jumpLine, onModeChange, onChange, onWikiOpen, onOpenInPane, onAttach }: EditorPaneProps) {
   const textarea = useRef<HTMLTextAreaElement>(null)
+  const contentRef = useRef(content)
   const preview = useRef<HTMLElement>(null)
   const editorStage = useRef<HTMLDivElement>(null)
   const splitPointer = useRef<number | null>(null)
+  const previewPointer = useRef<{ id: number; index: number } | null>(null)
   const [cursor, setCursor] = useState(0)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
-  const [linkSelection, setLinkSelection] = useState<SelectionRange | null>(null)
+  const [linkSelection, setLinkSelection] = useState<(SelectionRange & { selectedText: string }) | null>(null)
   const [linkQuery, setLinkQuery] = useState('')
   const [linkTargetNote, setLinkTargetNote] = useState<TreeEntry | null>(null)
   const [linkLocations, setLinkLocations] = useState<DocumentLocation[]>([])
   const [linkLocationsBusy, setLinkLocationsBusy] = useState(false)
-  const [styleMenu, setStyleMenu] = useState<'color' | 'font' | null>(null)
   const [splitPercent, setSplitPercent] = useState(() => {
     const stored = Number(window.localStorage.getItem('pagefold:split-percent'))
     return Number.isFinite(stored) && stored >= 15 && stored <= 85 ? stored : 50
   })
   const [splitDragging, setSplitDragging] = useState(false)
+  const [previewWidths, setPreviewWidths] = useState<number[]>([])
+  const [previewPaths, setPreviewPaths] = useState(() => openDocuments.map((document) => document.path))
+  useEffect(() => { contentRef.current = content }, [content])
+  const openDocumentPaths = openDocuments.map((document) => document.path).join('\n')
+  useEffect(() => {
+    setPreviewPaths((current) => {
+      const available = current.filter((previewPath) => openDocuments.some((document) => document.path === previewPath))
+      return available.includes(path) ? available : [...available, path]
+    })
+  }, [openDocumentPaths, path])
+  const visiblePreviewCount = openDocuments.filter((document) => previewPaths.includes(document.path)).length
+  useEffect(() => {
+    setPreviewWidths((current) => {
+      if (current.length === visiblePreviewCount) return current
+      return Array.from({ length: visiblePreviewCount }, () => 1)
+    })
+  }, [visiblePreviewCount])
+
+  function resizePreview(index: number, clientX: number): void {
+    const bounds = editorStage.current?.getBoundingClientRect()
+    if (!bounds || previewWidths.length < 2) return
+    const position = Math.min(0.9, Math.max(0.1, (clientX - bounds.left) / bounds.width))
+    const total = previewWidths.reduce((sum, width) => sum + width, 0)
+    const before = previewWidths.slice(0, index).reduce((sum, width) => sum + width, 0)
+    const pairTotal = previewWidths[index] + previewWidths[index + 1]
+    const nextFirst = Math.min(pairTotal - 0.1, Math.max(0.1, position * total - before))
+    setPreviewWidths((current) => current.map((width, itemIndex) => itemIndex === index ? nextFirst : itemIndex === index + 1 ? pairTotal - nextFirst : width))
+  }
+
+  function dropDocument(event: DragEvent<HTMLElement>, pane: 'left' | 'right'): void {
+    event.preventDefault()
+    const droppedPath = event.dataTransfer.getData('text/pagefold-path')
+    if (!droppedPath || !/\.(md|markdown|txt)$/i.test(droppedPath)) return
+    setPreviewPaths((current) => {
+      const withoutDropped = current.filter((item) => item !== droppedPath)
+      return pane === 'left' ? [droppedPath, ...withoutDropped] : [...withoutDropped, droppedPath]
+    })
+    onOpenInPane(droppedPath, pane)
+  }
   const wikiMatch = findWikiMatch(content, cursor)
   const notes = useMemo(() => flattenMarkdownFiles(tree), [tree])
   const suggestions = wikiMatch
@@ -171,56 +275,15 @@ export function EditorPane({ path, content, tree, recentPaths, mode, jumpLine, o
     setSplitDragging(false)
   }
 
-  function insertText(text: string): void {
-    const element = textarea.current
-    const start = element?.selectionStart ?? content.length
-    const end = element?.selectionEnd ?? start
-    const next = `${content.slice(0, start)}${text}${content.slice(end)}`
-    onChange(next)
-    requestAnimationFrame(() => {
-      const nextCursor = start + text.length
-      element?.focus()
-      element?.setSelectionRange(nextCursor, nextCursor)
-      setCursor(nextCursor)
-    })
-  }
-
   function replaceRange(range: SelectionRange, text: string): void {
     const next = `${content.slice(0, range.start)}${text}${content.slice(range.end)}`
     const nextCursor = range.start + text.length
-    onChange(next)
+    onChange(path, next)
     requestAnimationFrame(() => {
       textarea.current?.focus()
       textarea.current?.setSelectionRange(nextCursor, nextCursor)
       setCursor(nextCursor)
     })
-  }
-
-  function wrapSelection(before: string, after: string, placeholder: string): void {
-    const element = textarea.current
-    const start = element?.selectionStart ?? content.length
-    const end = element?.selectionEnd ?? start
-    const selected = content.slice(start, end) || placeholder
-    const insertion = `${before}${selected}${after}`
-    onChange(`${content.slice(0, start)}${insertion}${content.slice(end)}`)
-    requestAnimationFrame(() => {
-      const selectionStart = start + before.length
-      const selectionEnd = selectionStart + selected.length
-      element?.focus()
-      element?.setSelectionRange(selectionStart, selectionEnd)
-      setCursor(selectionEnd)
-    })
-  }
-
-  function prefixSelectedLines(prefix: string): void {
-    const element = textarea.current
-    const selectionStart = element?.selectionStart ?? content.length
-    const selectionEnd = element?.selectionEnd ?? selectionStart
-    const start = content.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1
-    const nextBreak = content.indexOf('\n', selectionEnd)
-    const end = nextBreak < 0 ? content.length : nextBreak
-    const selected = content.slice(start, end)
-    replaceRange({ start, end }, selected.split('\n').map((line) => `${prefix}${line}`).join('\n'))
   }
 
   async function copyContextSelection(menu: ContextMenuState): Promise<void> {
@@ -295,22 +358,34 @@ export function EditorPane({ path, content, tree, recentPaths, mode, jumpLine, o
 
   function chooseLink(note: TreeEntry, line?: number): void {
     if (!linkSelection) return
-    const selectedText = content.slice(linkSelection.start, linkSelection.end)
-    replaceRange(linkSelection, buildWikiLink(note.path, selectedText, line ? `L${line}` : ''))
+    replaceRange(linkSelection, buildWikiLink(note.path, linkSelection.selectedText, line ? `L${line}` : ''))
     closeLinkPicker()
   }
 
   async function attachFiles(files: File[]): Promise<void> {
-    for (const file of files.filter((item) => item.type.startsWith('image/'))) {
-      const markdownPath = await onAttach(file)
-      insertText(`![${file.name}](${markdownPath})`)
-    }
+    const images = files.filter((item) => item.type.startsWith('image/'))
+    if (!images.length) return
+    const attachments: string[] = []
+    for (const file of images) attachments.push(`![${file.name}](${await onAttach(path, file)})`)
+    const element = textarea.current
+    const currentContent = contentRef.current
+    const start = element?.selectionStart ?? currentContent.length
+    const end = element?.selectionEnd ?? start
+    const insertion = attachments.join('\n')
+    const next = `${currentContent.slice(0, start)}${insertion}${currentContent.slice(end)}`
+    onChange(path, next)
+    requestAnimationFrame(() => {
+      const nextCursor = start + insertion.length
+      element?.focus()
+      element?.setSelectionRange(nextCursor, nextCursor)
+      setCursor(nextCursor)
+    })
   }
 
   function chooseSuggestion(target: string): void {
     if (!wikiMatch) return
     const result = insertWikiTarget(content, wikiMatch, target.replace(/\.md$/i, ''))
-    onChange(result.content)
+    onChange(path, result.content)
     requestAnimationFrame(() => {
       textarea.current?.focus()
       textarea.current?.setSelectionRange(result.cursor, result.cursor)
@@ -319,7 +394,7 @@ export function EditorPane({ path, content, tree, recentPaths, mode, jumpLine, o
   }
 
   return (
-    <section className={`editor-shell ${mode !== 'preview' ? 'has-format-toolbar' : ''}`}>
+    <section className="editor-shell">
       <div className="editor-toolbar">
         <span className="document-path">{displayLibraryPath(path)}</span>
         <div className="mode-switch" aria-label="Editor mode">
@@ -328,44 +403,14 @@ export function EditorPane({ path, content, tree, recentPaths, mode, jumpLine, o
           <button className={mode === 'preview' ? 'active' : ''} onClick={() => onModeChange('preview')} title="Preview"><Eye size={15} /></button>
         </div>
       </div>
-      {mode !== 'preview' && (
-        <div className="format-toolbar" aria-label="Markdown formatting">
-          <div className="format-group">
-            <button onMouseDown={(event) => event.preventDefault()} onClick={() => wrapSelection('**', '**', 'bold text')} title="Bold" aria-label="Bold"><Bold size={14} /></button>
-            <button onMouseDown={(event) => event.preventDefault()} onClick={() => wrapSelection('*', '*', 'italic text')} title="Italic" aria-label="Italic"><Italic size={14} /></button>
-            <button onMouseDown={(event) => event.preventDefault()} onClick={() => wrapSelection('~~', '~~', 'strikethrough text')} title="Strikethrough" aria-label="Strikethrough"><Strikethrough size={14} /></button>
-            <button onMouseDown={(event) => event.preventDefault()} onClick={() => wrapSelection('`', '`', 'code')} title="Inline code" aria-label="Inline code"><Code2 size={14} /></button>
-          </div>
-          <div className="format-group">
-            <button onMouseDown={(event) => event.preventDefault()} onClick={() => prefixSelectedLines('# ')} title="Heading 1" aria-label="Heading 1"><Heading1 size={14} /></button>
-            <button onMouseDown={(event) => event.preventDefault()} onClick={() => prefixSelectedLines('- ')} title="List" aria-label="List"><ListIcon size={14} /></button>
-            <button onMouseDown={(event) => event.preventDefault()} onClick={() => prefixSelectedLines('> ')} title="Blockquote" aria-label="Blockquote"><Quote size={14} /></button>
-          </div>
-          <div className="format-group format-style-group">
-            <button onMouseDown={(event) => event.preventDefault()} onClick={() => wrapSelection('<mark>', '</mark>', 'highlighted text')} title="Highlight" aria-label="Highlight"><Highlighter size={14} /></button>
-            <span className="format-popover-wrap">
-              <button className={styleMenu === 'color' ? 'active' : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => setStyleMenu((current) => current === 'color' ? null : 'color')} title="Text color" aria-label="Text color"><Palette size={14} /></button>
-              {styleMenu === 'color' && (
-                <span className="format-popover color-popover">
-                  {(['red', 'amber', 'green', 'blue', 'violet', 'muted'] as const).map((color) => <button key={color} className={`color-swatch color-${color}`} aria-label={`${color} text`} onMouseDown={(event) => event.preventDefault()} onClick={() => { wrapSelection(`<span data-pf-color="${color}">`, '</span>', 'colored text'); setStyleMenu(null) }} />)}
-                </span>
-              )}
-            </span>
-            <span className="format-popover-wrap">
-              <button className={styleMenu === 'font' ? 'active' : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => setStyleMenu((current) => current === 'font' ? null : 'font')} title="Font" aria-label="Font"><Type size={14} /></button>
-              {styleMenu === 'font' && (
-                <span className="format-popover font-popover">
-                  {([['serif', 'Serif'], ['sans', 'Sans serif'], ['mono', 'Monospace'], ['hand', 'Handwriting']] as const).map(([font, label]) => <button key={font} className={`font-option font-${font}`} onMouseDown={(event) => event.preventDefault()} onClick={() => { wrapSelection(`<span data-pf-font="${font}">`, '</span>', 'text'); setStyleMenu(null) }}>{label}</button>)}
-                </span>
-              )}
-            </span>
-          </div>
-        </div>
-      )}
       <div
         ref={editorStage}
         className={`editor-stage mode-${mode}${splitDragging ? ' is-resizing' : ''}`}
-        style={mode === 'split' ? { gridTemplateColumns: `minmax(260px, ${splitPercent}fr) 9px minmax(260px, ${100 - splitPercent}fr)` } : undefined}
+        style={mode === 'split'
+          ? { gridTemplateColumns: `minmax(0, ${splitPercent}fr) 9px minmax(0, ${100 - splitPercent}fr)` }
+          : mode === 'preview' && previewWidths.length > 0
+            ? { gridTemplateColumns: previewWidths.map((width) => `minmax(0, ${width}fr)`).join(' ') }
+            : undefined}
       >
         {mode !== 'preview' && (
           <div className="source-wrap">
@@ -376,18 +421,23 @@ export function EditorPane({ path, content, tree, recentPaths, mode, jumpLine, o
               aria-label="Markdown editor"
               onContextMenu={(event) => {
                 event.preventDefault()
+                const selectionStart = event.currentTarget.selectionStart
+                const selectionEnd = event.currentTarget.selectionEnd
+                const linkedRange = findDocumentLinkAtOffset(content, selectionStart)
+                const existingLink = Boolean(linkedRange && selectionEnd <= linkedRange.end)
+                const position = contextMenuPosition(event.clientX, event.clientY, existingLink)
                 setContextMenu({
-                  start: event.currentTarget.selectionStart,
-                  end: event.currentTarget.selectionEnd,
-                  x: Math.min(event.clientX, window.innerWidth - 190),
-                  y: Math.min(event.clientY, window.innerHeight - 235),
-                  selectedText: event.currentTarget.value.slice(event.currentTarget.selectionStart, event.currentTarget.selectionEnd),
+                  start: existingLink ? linkedRange!.start : selectionStart,
+                  end: existingLink ? linkedRange!.end : selectionEnd,
+                  ...position,
+                  selectedText: existingLink ? linkedRange!.label : event.currentTarget.value.slice(selectionStart, selectionEnd),
                   source: 'editor',
-                  editable: true
+                  editable: true,
+                  existingLink
                 })
               }}
               onChange={(event) => {
-                onChange(event.target.value)
+                onChange(path, event.target.value)
                 setCursor(event.target.selectionStart)
               }}
               onClick={(event) => setCursor(event.currentTarget.selectionStart)}
@@ -458,14 +508,25 @@ export function EditorPane({ path, content, tree, recentPaths, mode, jumpLine, o
             <span aria-hidden="true" />
           </div>
         )}
-        {mode !== 'edit' && (
+        {mode === 'preview' && openDocuments.filter((document) => previewPaths.includes(document.path) && document.path !== path).map((document) => <DocumentPreview key={document.path} path={document.path} content={document.content} onWikiOpen={onWikiOpen} onDrop={(event) => dropDocument(event, 'left')} onClose={() => setPreviewPaths((current) => current.filter((item) => item !== document.path))} />)}
+        {mode === 'preview' && previewWidths.slice(0, -1).map((_width, index) => <div key={`preview-divider-${index}`} className="preview-resizer" style={{ left: `${previewWidths.slice(0, index + 1).reduce((sum, width) => sum + width, 0) / previewWidths.reduce((sum, width) => sum + width, 0) * 100}%` }} role="separator" aria-label={`Resize document divider ${index + 1}`} tabIndex={0} onPointerDown={(event) => { if (event.button !== 0) return; previewPointer.current = { id: event.pointerId, index }; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={(event) => { if (previewPointer.current?.id === event.pointerId) resizePreview(index, event.clientX) }} onPointerUp={(event) => { if (previewPointer.current?.id === event.pointerId) previewPointer.current = null }} onPointerCancel={(event) => { if (previewPointer.current?.id === event.pointerId) previewPointer.current = null }} />)}
+        {mode !== 'edit' && previewPaths.includes(path) && (
           <article
             ref={preview}
             className="markdown-preview"
             aria-label="Markdown preview"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => dropDocument(event, 'right')}
             onDoubleClick={jumpFromPreviewElement}
             onContextMenu={(event) => {
               event.preventDefault()
+              const clickedAnchor = event.target instanceof Element ? event.target.closest('a') : null
+              const previewDocumentAnchors = Array.from(event.currentTarget.querySelectorAll('a')).filter((anchor) => {
+                const href = anchor.getAttribute('href') ?? ''
+                return href.startsWith('#wiki:') || /\.(md|markdown|txt)(?:#.*)?$/i.test(href)
+              })
+              const linkedRange = clickedAnchor ? extractEditableDocumentLinks(content)[previewDocumentAnchors.indexOf(clickedAnchor)] ?? null : null
+              const existingLink = Boolean(linkedRange)
               const selection = window.getSelection()
               const selectedRange = selection?.rangeCount ? selection.getRangeAt(0) : null
               const selectedText = selectedRange && event.currentTarget.contains(selectedRange.commonAncestorContainer) ? selection?.toString() ?? '' : ''
@@ -481,15 +542,16 @@ export function EditorPane({ path, content, tree, recentPaths, mode, jumpLine, o
                   offset = precedingText.indexOf(selectedText, offset + selectedText.length)
                 }
               }
-              const sourceRange = findSourceTextRange(content, selectedText, occurrence)
+              const sourceRange = linkedRange ?? findSourceTextRange(content, selectedText, occurrence)
+              const position = contextMenuPosition(event.clientX, event.clientY, existingLink)
               setContextMenu({
                 start: sourceRange?.start ?? cursor,
                 end: sourceRange?.end ?? cursor,
-                x: Math.min(event.clientX, window.innerWidth - 190),
-                y: Math.min(event.clientY, window.innerHeight - 235),
-                selectedText,
+                ...position,
+                selectedText: linkedRange?.label ?? selectedText,
                 source: 'preview',
-                editable: Boolean(sourceRange)
+                editable: Boolean(sourceRange),
+                existingLink
               })
             }}
           >
@@ -502,15 +564,17 @@ export function EditorPane({ path, content, tree, recentPaths, mode, jumpLine, o
                     ? <span className={`pf-${href.slice(10)}`}>{children}</span>
                     : <a
                         href={href}
+                        target={href && /^https?:/i.test(href) ? '_blank' : undefined}
+                        rel={href && /^https?:/i.test(href) ? 'noreferrer' : undefined}
                         onClick={(event) => {
                           if (href?.startsWith('#wiki:')) {
                             event.preventDefault()
-                            onWikiOpen(decodeURIComponent(href.slice(6)))
+                            onWikiOpen(safeDecode(href.slice(6)))
                           } else if (href && /\.(md|markdown|txt)(?:#.*)?$/i.test(href)) {
                             event.preventDefault()
                             const [linkedPath, fragment] = href.split('#', 2)
-                            const resolved = resolveRelativeNotePath(path, decodeURIComponent(linkedPath))
-                            onWikiOpen(fragment ? `${resolved}#${decodeURIComponent(fragment)}` : resolved)
+                            const resolved = resolveRelativeNotePath(path, safeDecode(linkedPath))
+                            onWikiOpen(fragment ? `${resolved}#${safeDecode(fragment)}` : resolved)
                           }
                         }}
                       >{children}</a>
@@ -541,10 +605,11 @@ export function EditorPane({ path, content, tree, recentPaths, mode, jumpLine, o
           </article>
         )}
       </div>
-      {contextMenu && (
+      {contextMenu && createPortal(
         <div className="editor-context-layer" onMouseDown={() => setContextMenu(null)}>
           <div className="editor-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
-            <button disabled={!contextMenu.editable} onClick={() => { setLinkSelection(contextMenu); setLinkTargetNote(null); setLinkLocations([]); setLinkQuery(''); setContextMenu(null) }}><Link2 size={14} />Link to document</button>
+            <button disabled={!contextMenu.editable} onClick={() => { setLinkSelection({ start: contextMenu.start, end: contextMenu.end, selectedText: contextMenu.selectedText }); setLinkTargetNote(null); setLinkLocations([]); setLinkQuery(''); setContextMenu(null) }}><Link2 size={14} />{contextMenu.existingLink ? 'Change link' : 'Link to document'}</button>
+            {contextMenu.existingLink && <button onClick={() => { replaceRange(contextMenu, contextMenu.selectedText); setContextMenu(null) }}><Unlink size={14} />Remove link</button>}
             <span />
             <button disabled={!contextMenu.selectedText} onClick={() => { void copyContextSelection(contextMenu); setContextMenu(null) }}><Copy size={14} />Copy</button>
             <button disabled={!contextMenu.editable || !contextMenu.selectedText} onClick={() => { void copyContextSelection(contextMenu).then(() => replaceRange(contextMenu, '')); setContextMenu(null) }}><Scissors size={14} />Cut</button>
@@ -552,9 +617,10 @@ export function EditorPane({ path, content, tree, recentPaths, mode, jumpLine, o
             <span />
             <button onClick={() => selectAll(contextMenu.source)}><TextSelect size={14} />Select all</button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
-      {linkSelection && (
+      {linkSelection && createPortal(
         <div className="link-picker-backdrop" onMouseDown={closeLinkPicker}>
           <section className="link-picker" role="dialog" aria-modal="true" aria-label="Link to document" onMouseDown={(event) => event.stopPropagation()}>
             <div className="link-picker-search">
@@ -602,7 +668,8 @@ export function EditorPane({ path, content, tree, recentPaths, mode, jumpLine, o
               {linkTargetNote && !linkLocationsBusy && linkLocationChoices.length === 0 && <div className="link-picker-empty">{linkQuery.trim() ? 'No matching content' : 'No headings in this document'}</div>}
             </div>
           </section>
-        </div>
+        </div>,
+        document.body
       )}
     </section>
   )

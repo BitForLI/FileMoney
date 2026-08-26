@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildDocumentJumpTarget, buildWikiLink, displayEntryName, displayLibraryPath, extractDocumentLocations, extractOutgoingDocumentLinks, findSourceTextRange, findWikiMatch, flattenMarkdownFiles, insertWikiTarget, offsetForLine, renderableMarkdown, resolveRelativeNotePath, wikiLinksToMarkdown } from './markdown'
+import { buildDocumentJumpTarget, buildWikiLink, displayEntryName, displayLibraryPath, extractDocumentLocations, extractEditableDocumentLinks, extractOutgoingDocumentLinks, findDocumentLinkAtOffset, findSourceTextRange, findWikiMatch, flattenMarkdownFiles, insertWikiTarget, offsetForLine, renderableMarkdown, resolveRelativeNotePath, wikiLinksToMarkdown } from './markdown'
 
 describe('Markdown helpers', () => {
   it('uses English display aliases without changing stored paths', () => {
@@ -22,6 +22,16 @@ describe('Markdown helpers', () => {
   it('builds a wiki link from a selected phrase', () => {
     expect(buildWikiLink('项目/计划.md', '这份计划')).toBe('[[项目/计划|这份计划]]')
     expect(buildWikiLink('项目/计划.md', '概率', 'L12')).toBe('[[项目/计划#L12|概率]]')
+  })
+
+  it('finds editable Wiki and Markdown document links', () => {
+    const content = '参见 [[项目/计划#L12|这份计划]] 和 [说明](../说明.md#开始)，不要匹配 [网页](https://example.com)。'
+    expect(extractEditableDocumentLinks(content)).toEqual([
+      { start: 3, end: 21, target: '项目/计划#L12', label: '这份计划', kind: 'wiki' },
+      { start: 24, end: 41, target: '../说明.md#开始', label: '说明', kind: 'markdown' }
+    ])
+    expect(findDocumentLinkAtOffset(content, 12)?.label).toBe('这份计划')
+    expect(findDocumentLinkAtOffset(content, content.indexOf('网页'))).toBeNull()
   })
 
   it('extracts headings and paragraph locations from a document', () => {
@@ -59,6 +69,12 @@ describe('Markdown helpers', () => {
     expect(extractOutgoingDocumentLinks('[[项目计划|计划]]\n[日志](../日志.md#L8)\n[[项目计划]]', '项目/今天.md')).toEqual([
       { target: '项目计划', label: '计划', line: 1, kind: 'wiki' },
       { target: '日志.md#L8', label: '日志', line: 2, kind: 'markdown' }
+    ])
+  })
+
+  it('keeps malformed percent escapes from crashing outgoing-link extraction', () => {
+    expect(extractOutgoingDocumentLinks('[坏链接](%ZZ.md)', '项目/今天.md')).toEqual([
+      { target: '项目/%ZZ.md', label: '坏链接', line: 1, kind: 'markdown' }
     ])
   })
 

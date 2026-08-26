@@ -55,4 +55,6 @@ export interface WorkspaceApi {
   saveAttachment: (input: AttachmentInput) => Promise<AttachmentResult>
   readClipboardText: () => Promise<string>
   writeClipboardText: (text: string) => Promise<void>
+  onPrepareClose: (callback: () => void) => () => void
+  finishClose: () => Promise<void>
 }

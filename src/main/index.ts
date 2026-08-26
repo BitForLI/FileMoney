@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, net, protocol } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, net, protocol, shell } from 'electron'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -19,6 +19,8 @@ protocol.registerSchemesAsPrivileged([
 
 const TEXT_EXTENSIONS = new Set(['.md', '.markdown', '.txt'])
 const IGNORED_FOLDERS = new Set(['.git', '.assets', '.pagefold-initialized', '.pagefold-section', 'node_modules', '.DS_Store'])
+const RESERVED_NAMES = new Set(['.git', '.assets', '.pagefold-initialized', '.pagefold-section', '.ds_store', 'node_modules'])
+const closeReadyWindows = new WeakSet<BrowserWindow>()
 let workspaceRoot: string | null = null
 
 async function initializeLibrary(): Promise<void> {
@@ -49,6 +51,35 @@ function normalizeRelative(relativePath: string): string {
   return relativePath.replaceAll('\\', '/').replace(/^\/+/, '')
 }
 
+function canonicalNotePath(relativePath: string): string {
+  return normalizeRelative(relativePath)
+    .replace(/\.(md|markdown|txt)$/i, '')
+    .toLocaleLowerCase()
+}
+
+function contentLinksToTarget(content: string, sourcePath: string, targetPath: string): boolean {
+  const canonicalTarget = canonicalNotePath(targetPath)
+  const targetName = path.posix.basename(canonicalTarget)
+  for (const match of content.matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g)) {
+    const rawTarget = match[1].split('#', 1)[0].trim()
+    const canonicalLink = canonicalNotePath(rawTarget)
+    if (canonicalLink === canonicalTarget || !canonicalLink.includes('/') && canonicalLink === targetName) return true
+  }
+  for (const match of content.matchAll(/(?<!!)\[[^\]]+\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
+    const rawTarget = match[1].split('#', 1)[0]
+    if (!TEXT_EXTENSIONS.has(path.posix.extname(rawTarget).toLowerCase())) continue
+    let decoded: string
+    try {
+      decoded = decodeURIComponent(rawTarget)
+    } catch {
+      continue
+    }
+    const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(normalizeRelative(sourcePath)), decoded))
+    if (canonicalNotePath(resolved) === canonicalTarget) return true
+  }
+  return false
+}
+
 function resolveInWorkspace(relativePath = ''): string {
   const root = requireWorkspace()
   const resolved = path.resolve(root, normalizeRelative(relativePath))
@@ -58,6 +89,29 @@ function resolveInWorkspace(relativePath = ''): string {
     throw new Error('Path is outside the current workspace')
   }
   return resolved
+}
+
+function validatedEntryName(requestedName: string, type: EntryType, existingExtension = ''): string {
+  let safeName = path.basename(requestedName.trim())
+  const deviceName = safeName.split('.')[0].toLocaleLowerCase()
+  if (!safeName || safeName === '.' || safeName === '..' || RESERVED_NAMES.has(safeName.toLocaleLowerCase())
+    || /[<>:"/\\|?*\u0000-\u001f]/.test(safeName) || /[. ]$/.test(safeName)
+    || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(deviceName)) throw new Error('Invalid name')
+  if (type === 'file' && !path.extname(safeName)) safeName = `${safeName}${existingExtension || '.md'}`
+  if (type === 'file' && !TEXT_EXTENSIONS.has(path.extname(safeName).toLowerCase())) {
+    throw new Error('Notes must use .md, .markdown, or .txt')
+  }
+  return safeName
+}
+
+async function ensureAvailableTarget(source: string, target: string): Promise<void> {
+  if (source === target || source.toLocaleLowerCase() === target.toLocaleLowerCase()) return
+  try {
+    await fs.access(target)
+  } catch {
+    return
+  }
+  throw new Error('An item with that name already exists')
 }
 
 async function readTree(directory: string, relative = '', depth = 0): Promise<TreeEntry[]> {
@@ -92,7 +146,7 @@ async function readTree(directory: string, relative = '', depth = 0): Promise<Tr
         modifiedAt: stat.mtimeMs,
         children: await readTree(absolute, entryRelative, depth + 1)
       })
-    } else if (entry.isFile()) {
+    } else if (entry.isFile() && TEXT_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
       tree.push({ name: entry.name, path: entryRelative, type: 'file', modifiedAt: stat.mtimeMs })
     }
   }
@@ -149,7 +203,7 @@ function createWindow(): void {
     height: 920,
     minWidth: 980,
     minHeight: 640,
-    backgroundColor: '#e9e4da',
+    backgroundColor: '#ffffff',
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
@@ -159,8 +213,31 @@ function createWindow(): void {
       sandbox: true
     }
   })
+  let closeFallback: ReturnType<typeof setTimeout> | null = null
 
   window.once('ready-to-show', () => window.show())
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  window.webContents.on('will-navigate', (event, url) => {
+    const current = window.webContents.getURL()
+    if (url === current) return
+    event.preventDefault()
+    if (/^https?:/i.test(url)) void shell.openExternal(url)
+  })
+  window.on('close', (event) => {
+    if (closeReadyWindows.has(window) || window.webContents.isDestroyed()) return
+    event.preventDefault()
+    window.webContents.send('window:prepare-close')
+    if (!closeFallback) {
+      closeFallback = setTimeout(() => {
+        closeReadyWindows.add(window)
+        window.close()
+      }, 5000)
+    }
+  })
+  window.on('closed', () => { if (closeFallback) clearTimeout(closeFallback) })
   if (process.env.ELECTRON_RENDERER_URL) window.loadURL(process.env.ELECTRON_RENDERER_URL)
   else window.loadFile(path.join(__dirname, '../renderer/index.html'))
 }
@@ -175,41 +252,50 @@ function registerIpc(): void {
   })
   ipcMain.handle('file:write', async (_event, relativePath: string, content: string) => {
     const absolute = resolveInWorkspace(relativePath)
-    await fs.writeFile(absolute, content, 'utf8')
+    if (!TEXT_EXTENSIONS.has(path.extname(absolute).toLowerCase())) throw new Error('Only Markdown and text files can be edited')
+    const handle = await fs.open(absolute, 'r+')
+    try {
+      await handle.truncate(0)
+      await handle.writeFile(content, 'utf8')
+    } finally {
+      await handle.close()
+    }
   })
   ipcMain.handle('entry:create', async (_event, parentPath: string, type: EntryType, requestedName: string) => {
-    const safeName = path.basename(requestedName.trim())
-    if (!safeName || safeName === '.' || safeName === '..') throw new Error('Invalid name')
+    if (!['file', 'folder', 'section'].includes(type)) throw new Error('Invalid entry type')
+    const safeName = validatedEntryName(requestedName, type)
     const parentParts = normalizeRelative(parentPath).split('/').filter(Boolean)
     if (type === 'section' && parentParts.length !== 0) throw new Error('Sections can only be created at the library root')
-    const name = type === 'file' && !path.extname(safeName) ? `${safeName}.md` : safeName
-    const relative = normalizeRelative(path.posix.join(parentPath, name))
+    const parent = resolveInWorkspace(parentPath)
+    if (!(await fs.stat(parent)).isDirectory()) throw new Error('Items can only be created in a folder')
+    const relative = normalizeRelative(path.posix.join(parentPath, safeName))
     const absolute = resolveInWorkspace(relative)
     if (type === 'folder' || type === 'section') {
       await fs.mkdir(absolute)
       if (type === 'section') await fs.writeFile(path.join(absolute, '.pagefold-section'), '', 'utf8')
-    } else await fs.writeFile(absolute, `# ${path.parse(name).name}\n`, { encoding: 'utf8', flag: 'wx' })
+    } else await fs.writeFile(absolute, `# ${path.parse(safeName).name}\n`, { encoding: 'utf8', flag: 'wx' })
     return relative
   })
   ipcMain.handle('entry:rename', async (_event, relativePath: string, requestedName: string) => {
     const current = resolveInWorkspace(relativePath)
     const currentStat = await fs.stat(current)
-    let safeName = path.basename(requestedName.trim())
-    if (!safeName || safeName === '.' || safeName === '..') throw new Error('Invalid name')
-    if (currentStat.isFile() && !path.extname(safeName)) safeName = `${safeName}${path.extname(current) || '.md'}`
+    const safeName = validatedEntryName(requestedName, currentStat.isFile() ? 'file' : 'folder', path.extname(current))
     const target = path.join(path.dirname(current), safeName)
     resolveInWorkspace(path.relative(requireWorkspace(), target))
+    await ensureAvailableTarget(current, target)
     await fs.rename(current, target)
     return normalizeRelative(path.relative(requireWorkspace(), target))
   })
   ipcMain.handle('entry:move', async (_event, sourcePath: string, targetFolder: string) => {
     const source = resolveInWorkspace(sourcePath)
     const folder = resolveInWorkspace(targetFolder)
+    if (!(await fs.stat(folder)).isDirectory()) throw new Error('Items can only be moved into a folder')
     const target = path.join(folder, path.basename(source))
     if (target.toLocaleLowerCase() === source.toLocaleLowerCase()) return normalizeRelative(sourcePath)
     if (folder.toLocaleLowerCase().startsWith(`${source.toLocaleLowerCase()}${path.sep}`)) {
       throw new Error('A folder cannot be moved into itself')
     }
+    await ensureAvailableTarget(source, target)
     await fs.rename(source, target)
     return normalizeRelative(path.relative(requireWorkspace(), target))
   })
@@ -227,7 +313,14 @@ function registerIpc(): void {
   })
   ipcMain.handle('entry:delete', async (_event, relativePath: string) => {
     const absolute = resolveInWorkspace(relativePath)
+    if (absolute === requireWorkspace()) throw new Error('The library root cannot be deleted')
     await fs.rm(absolute, { recursive: true, force: false })
+  })
+  ipcMain.handle('window:close-ready', (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) return
+    closeReadyWindows.add(window)
+    window.close()
   })
   ipcMain.handle('clipboard:read-text', () => clipboard.readText())
   ipcMain.handle('clipboard:write-text', (_event, text: string) => clipboard.writeText(text))
@@ -247,16 +340,13 @@ function registerIpc(): void {
     return matches
   })
   ipcMain.handle('links:backlinks', async (_event, relativePath: string) => {
-    const stem = path.parse(relativePath).name
-    const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const linkPattern = new RegExp(`\\[\\[(?:[^\\]|]+/)?${escaped}(?:[#|][^\\]]*)?\\]\\]`, 'i')
     const files = await collectTextFiles(requireWorkspace())
     const results: BacklinkResult[] = []
     for (const file of files) {
       if (file === relativePath) continue
       const content = await fs.readFile(resolveInWorkspace(file), 'utf8')
       content.split(/\r?\n/).forEach((line, index) => {
-        if (linkPattern.test(line)) results.push({ path: file, name: path.basename(file), line: index + 1, excerpt: line.trim().slice(0, 180) })
+        if (contentLinksToTarget(line, file, relativePath)) results.push({ path: file, name: path.basename(file), line: index + 1, excerpt: line.trim().slice(0, 180) })
       })
     }
     return results

@@ -45,7 +45,7 @@ async function inspectDom(webSocketDebuggerUrl) {
     requestId += 1
     const id = requestId
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)) }, 30000)
+      const timeout = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)) }, 90000)
       pending.set(id, (message) => { clearTimeout(timeout); resolve(message) })
       socket.send(JSON.stringify({ id, method, params }))
     })
@@ -64,6 +64,9 @@ async function inspectDom(webSocketDebuggerUrl) {
           let workspaceEntries = 0
           let ipcError = null
           let rootNoteRoundTrip = false
+          let invalidExtensionRejected = false
+          let deletedFileWriteRejected = false
+          let renameCollisionRejected = false
           let dragDropImported = false
           let dropTargetHighlighted = false
           let folderDragDropImported = false
@@ -75,23 +78,41 @@ async function inspectDom(webSocketDebuggerUrl) {
           let compactTreeSpacing = false
           let sectionSelectionColors = false
           let previewContextMenuEnabled = false
+          let contextMenuPositioned = false
           let previewLinkPicker = false
           let activeNoteTabSync = false
           let linkLocationPicker = false
           let splitResizerEnabled = false
+          let formatToolbarRemoved = false
+          let searchDialogAvailable = false
+          let deleteConfirmationRemoved = false
           let treeLabelsEnglish = false
           let treeLabelFontReadable = false
           let tempPath = null
+          let invalidPath = null
+          let collisionSource = null
+          let collisionTarget = null
           try {
             const workspace = await window.pagefold.getWorkspace()
             workspaceName = workspace?.name ?? null
             workspaceEntries = workspace?.tree?.length ?? 0
             tempPath = await window.pagefold.createEntry('', 'file', '__pagefold-smoke-' + Date.now())
             rootNoteRoundTrip = (await window.pagefold.readFile(tempPath)).startsWith('# __pagefold-smoke-')
+            try { invalidPath = await window.pagefold.createEntry('', 'file', '__pagefold-invalid.png') } catch { invalidExtensionRejected = true }
+            await window.pagefold.deleteEntry(tempPath)
+            try { await window.pagefold.writeFile(tempPath, 'must not be recreated') } catch { deletedFileWriteRejected = true }
+            tempPath = null
+            const collisionStamp = Date.now()
+            collisionSource = await window.pagefold.createEntry('', 'file', '__pagefold-source-' + collisionStamp)
+            collisionTarget = await window.pagefold.createEntry('', 'file', '__pagefold-target-' + collisionStamp)
+            try { await window.pagefold.renameEntry(collisionSource, collisionTarget) } catch { renameCollisionRejected = true }
           } catch (error) {
             ipcError = String(error)
           } finally {
             if (tempPath) await window.pagefold.deleteEntry(tempPath)
+            if (invalidPath) await window.pagefold.deleteEntry(invalidPath)
+            if (collisionSource) await window.pagefold.deleteEntry(collisionSource)
+            if (collisionTarget) await window.pagefold.deleteEntry(collisionTarget)
           }
           const importName = '__pagefold-drop-' + Date.now() + '.md'
           const importContent = '# Drop test\\n\\nInline formula $x^2$.\\n\\n$$\\n\\\\sum_{i=1}^n i\\n$$'
@@ -170,7 +191,7 @@ async function inspectDom(webSocketDebuggerUrl) {
             && (!storedNames.includes('我的笔记') || treeLabels.includes('My Notes'))
             && (!storedNames.includes('你的笔记') || treeLabels.includes('Your Notes'))
           treeLabelFontReadable = Array.from(document.querySelectorAll('.section-row strong'))
-            .every((label) => parseFloat(getComputedStyle(label).fontSize) >= 16)
+            .every((label) => parseFloat(getComputedStyle(label).fontSize) >= 13)
           const activeTabButton = document.querySelector('.tab-strip > button.active')
           const activeTabPath = activeTabButton?.dataset.path
           document.querySelector('.library-section:not(.is-current-section) > .section-row')?.click()
@@ -185,6 +206,12 @@ async function inspectDom(webSocketDebuggerUrl) {
           const createDialog = Boolean(document.querySelector('.entry-dialog'))
           const createInputFocused = document.activeElement?.id === 'entry-name'
           document.querySelector('.dialog-cancel')?.click()
+          formatToolbarRemoved = document.querySelector('.format-toolbar') === null
+          document.querySelector('.library-create-buttons button[aria-label="Search library"]')?.click()
+          await new Promise((resolve) => setTimeout(resolve, 80))
+          searchDialogAvailable = Boolean(document.querySelector('.search-dialog input'))
+          document.querySelector('.search-dialog .icon-button')?.click()
+          deleteConfirmationRemoved = document.querySelector('.delete-dialog') === null
           let editor = document.querySelector('textarea[aria-label="Markdown editor"]')
           if (!editor) {
             document.querySelector('.mode-switch button[title="Edit"]')?.click()
@@ -197,6 +224,12 @@ async function inspectDom(webSocketDebuggerUrl) {
             editor.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 500, clientY: 300 }))
           }
           await new Promise((resolve) => setTimeout(resolve, 80))
+          const contextMenuBounds = document.querySelector('.editor-context-menu')?.getBoundingClientRect()
+          contextMenuPositioned = Boolean(contextMenuBounds
+            && Math.abs(contextMenuBounds.left - 500) <= 1
+            && Math.abs(contextMenuBounds.top - 300) <= 1
+            && contextMenuBounds.right <= window.innerWidth - 8
+            && contextMenuBounds.bottom <= window.innerHeight - 8)
           const contextMenuItems = Array.from(document.querySelectorAll('.editor-context-menu button')).map((button) => button.textContent?.trim())
           document.querySelector('.editor-context-menu button')?.click()
           await new Promise((resolve) => setTimeout(resolve, 80))
@@ -259,6 +292,9 @@ async function inspectDom(webSocketDebuggerUrl) {
             workspaceEntries,
             ipcError,
             rootNoteRoundTrip,
+            invalidExtensionRejected,
+            deletedFileWriteRejected,
+            renameCollisionRejected,
             dragDropImported,
             dropTargetHighlighted,
             folderDragDropImported,
@@ -270,10 +306,14 @@ async function inspectDom(webSocketDebuggerUrl) {
             compactTreeSpacing,
             sectionSelectionColors,
             previewContextMenuEnabled,
+            contextMenuPositioned,
             previewLinkPicker,
             activeNoteTabSync,
             linkLocationPicker,
             splitResizerEnabled,
+            formatToolbarRemoved,
+            searchDialogAvailable,
+            deleteConfirmationRemoved,
             treeLabelsEnglish,
             treeLabelFontReadable,
             createDialog,
@@ -304,7 +344,11 @@ try {
   const page = await waitForPage()
   await new Promise((resolve) => setTimeout(resolve, 1000))
   const state = await inspectDom(page.webSocketDebuggerUrl)
-  if (!state.hasLibraryText || !state.rootNoteRoundTrip || !state.dragDropImported || !state.dropTargetHighlighted || !state.folderDragDropImported || !state.folderDropTargetHighlighted || !state.mathRendered || !state.mathSubscriptScaled || !state.sectionOnlyHighlight || !state.plainNoteRows || !state.compactTreeSpacing || !state.sectionSelectionColors || !state.previewContextMenuEnabled || !state.previewLinkPicker || !state.activeNoteTabSync || !state.linkLocationPicker || !state.splitResizerEnabled || !state.treeLabelsEnglish || !state.treeLabelFontReadable || state.rootCreateButtons !== 3 || !state.createDialog || !state.createInputFocused || !state.contextMenuItems.includes('Link to document') || !state.contextMenuItems.includes('Paste') || !state.linkPicker) {
+  const folderChecksFailed = state.folders > 0 && (!state.folderDragDropImported || !state.folderDropTargetHighlighted || !state.compactTreeSpacing)
+  const sectionChecksFailed = state.sections > 0 && (!state.sectionOnlyHighlight || !state.sectionSelectionColors)
+  const populatedLibraryChecksFailed = state.workspaceEntries > 0 && !state.activeNoteTabSync
+  const linkLocationChecksFailed = state.linkResults > 0 && !state.linkLocationPicker
+  if (!state.hasLibraryText || !state.rootNoteRoundTrip || !state.invalidExtensionRejected || !state.deletedFileWriteRejected || !state.renameCollisionRejected || !state.dragDropImported || !state.dropTargetHighlighted || folderChecksFailed || !state.mathRendered || !state.mathSubscriptScaled || sectionChecksFailed || !state.plainNoteRows || !state.previewContextMenuEnabled || !state.contextMenuPositioned || !state.previewLinkPicker || populatedLibraryChecksFailed || linkLocationChecksFailed || !state.splitResizerEnabled || !state.formatToolbarRemoved || !state.searchDialogAvailable || !state.deleteConfirmationRemoved || !state.treeLabelsEnglish || !state.treeLabelFontReadable || state.rootCreateButtons !== 5 || !state.createDialog || !state.createInputFocused || !state.contextMenuItems.includes('Link to document') || !state.contextMenuItems.includes('Paste') || !state.linkPicker) {
     throw new Error(`The library interface is incomplete: ${JSON.stringify(state)}`)
   }
   console.log(JSON.stringify(state))

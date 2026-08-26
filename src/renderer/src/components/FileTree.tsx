@@ -5,6 +5,7 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  Layers3,
   MoreHorizontal,
   Pencil,
   Trash2
@@ -67,7 +68,7 @@ function NoteRow({ entry, props }: { entry: TreeEntry; props: FileTreeProps }) {
         if (event.key === 'Enter') { props.onSelect(entry); props.onOpen(entry.path) }
       }}
     >
-      <span className="tree-name">{displayEntryName(entry.name.replace(/\.md$/i, ''))}</span>
+      <span className="tree-name" title={displayEntryName(entry.name.replace(/\.md$/i, ''))}>{displayEntryName(entry.name.replace(/\.md$/i, ''))}</span>
       <ActionMenu entry={entry} onRename={props.onRename} onDelete={props.onDelete} />
     </div>
   )
@@ -126,7 +127,7 @@ function FolderGroup({ entry, props }: { entry: TreeEntry; props: FileTreeProps 
       >
         <ChevronRight className={`tree-chevron ${open ? 'is-open' : ''}`} size={13} />
         {open ? <FolderOpen size={14} /> : <Folder size={14} />}
-        <strong className="tree-name folder-name">{displayEntryName(entry.name)}</strong>
+        <strong className="tree-name folder-name" title={displayEntryName(entry.name)}>{displayEntryName(entry.name)}</strong>
         <CreateButtons parent={entry.path} props={props} />
         <ActionMenu entry={entry} onRename={props.onRename} onDelete={props.onDelete} />
       </div>
@@ -172,7 +173,8 @@ function SectionGroup({ entry, index, props }: { entry: TreeEntry; index: number
           if (event.key === 'Enter' || event.key === ' ') { props.onSelect(entry); setOpen((value) => !value) }
         }}
       >
-        <strong>{displayEntryName(entry.name)}</strong>
+        <Layers3 className="section-icon" size={16} />
+        <strong title={displayEntryName(entry.name)}>{displayEntryName(entry.name)}</strong>
         <ChevronRight className={`section-chevron ${open ? 'is-open' : ''}`} size={14} />
         <CreateButtons parent={entry.path} props={props} />
         <ActionMenu entry={entry} onRename={props.onRename} onDelete={props.onDelete} />

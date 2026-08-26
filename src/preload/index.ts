@@ -15,7 +15,13 @@ const api: WorkspaceApi = {
   backlinks: (relativePath) => ipcRenderer.invoke('links:backlinks', relativePath),
   saveAttachment: (input: AttachmentInput) => ipcRenderer.invoke('attachment:save', input),
   readClipboardText: () => ipcRenderer.invoke('clipboard:read-text'),
-  writeClipboardText: (text: string) => ipcRenderer.invoke('clipboard:write-text', text)
+  writeClipboardText: (text: string) => ipcRenderer.invoke('clipboard:write-text', text),
+  onPrepareClose: (callback) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('window:prepare-close', listener)
+    return () => ipcRenderer.removeListener('window:prepare-close', listener)
+  },
+  finishClose: () => ipcRenderer.invoke('window:close-ready')
 }
 
 contextBridge.exposeInMainWorld('pagefold', api)

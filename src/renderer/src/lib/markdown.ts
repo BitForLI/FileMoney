@@ -23,6 +23,12 @@ export interface TextRange {
   end: number
 }
 
+export interface EditableDocumentLink extends TextRange {
+  target: string
+  label: string
+  kind: 'wiki' | 'markdown'
+}
+
 export interface DocumentLocation {
   line: number
   label: string
@@ -142,6 +148,38 @@ export function findSourceTextRange(content: string, selectedText: string, occur
   return { start, end: start + selection.length }
 }
 
+export function extractEditableDocumentLinks(content: string): EditableDocumentLink[] {
+  const links: EditableDocumentLink[] = []
+
+  for (const match of content.matchAll(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g)) {
+    if (match.index === undefined) continue
+    links.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      target: match[1].trim(),
+      label: match[2]?.trim() || match[1].trim(),
+      kind: 'wiki'
+    })
+  }
+
+  for (const match of content.matchAll(/(?<!!)\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
+    if (match.index === undefined || !/\.(md|markdown|txt)(?:#.*)?$/i.test(match[2])) continue
+    links.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      target: match[2],
+      label: match[1],
+      kind: 'markdown'
+    })
+  }
+
+  return links.sort((left, right) => left.start - right.start)
+}
+
+export function findDocumentLinkAtOffset(content: string, offset: number): EditableDocumentLink | null {
+  return extractEditableDocumentLinks(content).find((link) => offset >= link.start && offset <= link.end) ?? null
+}
+
 export function findWikiMatch(content: string, cursor: number): WikiMatch | null {
   const beforeCursor = content.slice(0, cursor)
   const match = beforeCursor.match(/\[\[([^\]\n]*)$/)
@@ -199,7 +237,12 @@ export function extractOutgoingDocumentLinks(content: string, notePath: string):
     const rawTarget = match[2]
     if (!/\.(md|markdown|txt)(?:#.*)?$/i.test(rawTarget)) continue
     const [rawPath, fragment] = rawTarget.split('#', 2)
-    const decoded = decodeURIComponent(rawPath)
+    let decoded: string
+    try {
+      decoded = decodeURIComponent(rawPath)
+    } catch {
+      decoded = rawPath
+    }
     const resolved = resolveRelativeNotePath(notePath, decoded)
     add(fragment ? `${resolved}#${fragment}` : resolved, match[1], match.index, 'markdown')
   }
