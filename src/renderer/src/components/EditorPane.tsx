@@ -225,11 +225,12 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
 
   useEffect(() => {
     if (!jumpLine) return
+    const currentContent = contentRef.current
     if (textarea.current) {
-      const start = offsetForLine(content, jumpLine)
-      const end = content.indexOf('\n', start)
+      const start = offsetForLine(currentContent, jumpLine)
+      const end = currentContent.indexOf('\n', start)
       textarea.current.focus()
-      textarea.current.setSelectionRange(start, end >= 0 ? end : content.length)
+      textarea.current.setSelectionRange(start, end >= 0 ? end : currentContent.length)
       const lineHeight = Number.parseFloat(window.getComputedStyle(textarea.current).lineHeight) || 26
       const paddingTop = Number.parseFloat(window.getComputedStyle(textarea.current).paddingTop) || 0
       textarea.current.scrollTop = Math.max(0, (jumpLine - 1) * lineHeight + paddingTop)
@@ -245,7 +246,7 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
       window.setTimeout(() => target.classList.remove('is-jump-target'), 1800)
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [jumpLine, content, mode])
+  }, [jumpLine, mode])
 
   useEffect(() => {
     window.localStorage.setItem('pagefold:split-percent', String(splitPercent))
