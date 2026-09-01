@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Check,
   ChevronRight,
@@ -100,6 +100,9 @@ export default function App() {
 
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? null
   const rightContextTab = tabs.find((tab) => tab.path === rightContextPath) ?? activeTab
+  const rightAnalysisContent = useDeferredValue(rightContextTab?.content ?? '')
+  const statusContent = useDeferredValue(activeTab?.content ?? '')
+  const statusText = useMemo(() => `${statusContent.trim() ? statusContent.trim().split(/\s+/).length : 0} words · ${statusContent.length} characters`, [statusContent])
   const activeSaveStatus: 'saved' | 'saving' | 'error' = activePath && saveErrors[activePath]
     ? 'error'
     : activeTab && activeTab.content !== activeTab.savedContent ? 'saving' : 'saved'
@@ -531,7 +534,7 @@ export default function App() {
     return result.markdownPath
   }
 
-  function openWiki(target: string): void {
+  const openWiki = useCallback((target: string): void => {
     const [rawTarget, fragment] = target.split('#', 2)
     const normalized = rawTarget.replaceAll('\\', '/').replace(/\.(md|markdown|txt)$/i, '')
     const note = flattenMarkdownFiles(tree).find((entry) => {
@@ -541,7 +544,7 @@ export default function App() {
     const line = fragment?.match(/^L(\d+)$/i)
     if (note) void openFile(note.path, line ? Number(line[1]) : undefined)
     else notify(`Could not find “${target}”`)
-  }
+  }, [openFile, tree])
 
   function resizeRightPanel(clientX: number): void {
     setRightPanelWidth(Math.min(420, Math.max(220, window.innerWidth - clientX)))
@@ -560,21 +563,21 @@ export default function App() {
     ...tabs.map((tab) => tab.path).reverse()
   ])), [activePath, tabs])
   const outgoingLinks = useMemo(
-    () => rightContextTab ? extractOutgoingDocumentLinks(rightContextTab.content, rightContextTab.path) : [],
-    [rightContextTab?.content, rightContextTab?.path]
+    () => rightContextTab ? extractOutgoingDocumentLinks(rightAnalysisContent, rightContextTab.path) : [],
+    [rightAnalysisContent, rightContextTab?.path]
   )
   const outline = useMemo(
     () => {
       if (!rightContextTab) return []
-      const lines = rightContextTab.content.split(/\r?\n/)
-      return extractDocumentLocations(rightContextTab.content)
+      const lines = rightAnalysisContent.split(/\r?\n/)
+      return extractDocumentLocations(rightAnalysisContent)
         .filter((location) => location.kind === 'heading')
         .map((location) => ({
           ...location,
           level: lines[location.line - 1]?.match(/^(#{1,6})\s/)?.[1].length ?? 1
         }))
     },
-    [rightContextTab?.content]
+    [rightAnalysisContent, rightContextTab?.path]
   )
 
   if (!workspace) return <main className="library-loading"><span>P</span><p>Preparing your library…</p><button onClick={() => void loadInitialWorkspace()}>Reload</button></main>
@@ -653,7 +656,7 @@ export default function App() {
           </div>
         )}
         <footer className="status-bar">
-          <span>{activeTab ? `${activeTab.content.trim() ? activeTab.content.trim().split(/\s+/).length : 0} words · ${activeTab.content.length} characters` : 'Ready'}</span>
+          <span>{activeTab ? statusText : 'Ready'}</span>
           <span className={`save-state ${activeSaveStatus}`}><Check size={12} />{activeSaveStatus === 'saving' ? 'Saving' : activeSaveStatus === 'error' ? 'Save failed' : 'Saved locally'}</span>
         </footer>
       </section>

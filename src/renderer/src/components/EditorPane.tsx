@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
@@ -143,9 +143,67 @@ export function LocationMarkdown({ source, onDoubleClick }: { source: string; on
   )
 }
 
+const MarkdownBody = memo(function MarkdownBody({ path, content, onWikiOpen, onSourceDoubleClick }: {
+  path: string
+  content: string
+  onWikiOpen: (target: string) => void
+  onSourceDoubleClick: (event: React.MouseEvent<HTMLElement>) => void
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: false }]]}
+      components={{
+        a: ({ href, children }) => (
+          href?.startsWith('#pf-style:')
+            ? <span className={`pf-${href.slice(10)}`}>{children}</span>
+            : <a
+                href={href}
+                target={href && /^https?:/i.test(href) ? '_blank' : undefined}
+                rel={href && /^https?:/i.test(href) ? 'noreferrer' : undefined}
+                onClick={(event) => {
+                  if (href?.startsWith('#wiki:')) {
+                    event.preventDefault()
+                    onWikiOpen(safeDecode(href.slice(6)))
+                  } else if (href && /\.(md|markdown|txt)(?:#.*)?$/i.test(href)) {
+                    event.preventDefault()
+                    const [linkedPath, fragment] = href.split('#', 2)
+                    const resolved = resolveRelativeNotePath(path, safeDecode(linkedPath))
+                    onWikiOpen(fragment ? `${resolved}#${safeDecode(fragment)}` : resolved)
+                  }
+                }}
+              >{children}</a>
+        ),
+        h1: ({ node, children }) => <h1 data-source-line={node?.position?.start.line} onDoubleClick={onSourceDoubleClick}>{children}</h1>,
+        h2: ({ node, children }) => <h2 data-source-line={node?.position?.start.line} onDoubleClick={onSourceDoubleClick}>{children}</h2>,
+        h3: ({ node, children }) => <h3 data-source-line={node?.position?.start.line} onDoubleClick={onSourceDoubleClick}>{children}</h3>,
+        h4: ({ node, children }) => <h4 data-source-line={node?.position?.start.line} onDoubleClick={onSourceDoubleClick}>{children}</h4>,
+        h5: ({ node, children }) => <h5 data-source-line={node?.position?.start.line} onDoubleClick={onSourceDoubleClick}>{children}</h5>,
+        h6: ({ node, children }) => <h6 data-source-line={node?.position?.start.line} onDoubleClick={onSourceDoubleClick}>{children}</h6>,
+        p: ({ node, children }) => <p data-source-line={node?.position?.start.line} onDoubleClick={onSourceDoubleClick}>{children}</p>,
+        li: ({ node, children }) => <li data-source-line={node?.position?.start.line} onDoubleClick={onSourceDoubleClick}>{children}</li>,
+        blockquote: ({ node, children }) => <blockquote data-source-line={node?.position?.start.line} onDoubleClick={onSourceDoubleClick}>{children}</blockquote>,
+        pre: ({ node, children }) => <pre data-source-line={node?.position?.start.line} onDoubleClick={onSourceDoubleClick}>{children}</pre>,
+        div: ({ node, children }) => <div data-source-line={node?.position?.start.line} onDoubleClick={onSourceDoubleClick}>{children}</div>,
+        img: ({ src, alt }) => {
+          const resolved = resolveRelativeNotePath(path, src ?? '')
+          const imageSource = /^(data:|blob:|https?:)/i.test(resolved)
+            ? resolved
+            : `vault:///asset?path=${encodeURIComponent(resolved)}`
+          return <img src={imageSource} alt={alt ?? ''} />
+        },
+        code: ({ children, className }) => <code className={className}><Braces size={12} aria-hidden="true" />{children}</code>
+      }}
+    >
+      {renderableMarkdown(content)}
+    </ReactMarkdown>
+  )
+}, (previous, next) => previous.path === next.path && previous.content === next.content && previous.onWikiOpen === next.onWikiOpen)
+
 export function EditorPane({ path, content, openDocuments, tree, recentPaths, mode, jumpLine, onModeChange, onChange, onWikiOpen, onOpenInPane, onAttach }: EditorPaneProps) {
   const textarea = useRef<HTMLTextAreaElement>(null)
   const contentRef = useRef(content)
+  const previewContent = useDeferredValue(content)
   const editorView = useRef({ path, start: 0, end: 0, scrollTop: 0 })
   const preview = useRef<HTMLElement>(null)
   const editorStage = useRef<HTMLDivElement>(null)
@@ -581,53 +639,7 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
               })
             }}
           >
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkMath]}
-              rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: false }]]}
-              components={{
-                a: ({ href, children }) => (
-                  href?.startsWith('#pf-style:')
-                    ? <span className={`pf-${href.slice(10)}`}>{children}</span>
-                    : <a
-                        href={href}
-                        target={href && /^https?:/i.test(href) ? '_blank' : undefined}
-                        rel={href && /^https?:/i.test(href) ? 'noreferrer' : undefined}
-                        onClick={(event) => {
-                          if (href?.startsWith('#wiki:')) {
-                            event.preventDefault()
-                            onWikiOpen(safeDecode(href.slice(6)))
-                          } else if (href && /\.(md|markdown|txt)(?:#.*)?$/i.test(href)) {
-                            event.preventDefault()
-                            const [linkedPath, fragment] = href.split('#', 2)
-                            const resolved = resolveRelativeNotePath(path, safeDecode(linkedPath))
-                            onWikiOpen(fragment ? `${resolved}#${safeDecode(fragment)}` : resolved)
-                          }
-                        }}
-                      >{children}</a>
-                ),
-                h1: ({ node, children }) => <h1 data-source-line={node?.position?.start.line} onDoubleClick={jumpFromPreviewElement}>{children}</h1>,
-                h2: ({ node, children }) => <h2 data-source-line={node?.position?.start.line} onDoubleClick={jumpFromPreviewElement}>{children}</h2>,
-                h3: ({ node, children }) => <h3 data-source-line={node?.position?.start.line} onDoubleClick={jumpFromPreviewElement}>{children}</h3>,
-                h4: ({ node, children }) => <h4 data-source-line={node?.position?.start.line} onDoubleClick={jumpFromPreviewElement}>{children}</h4>,
-                h5: ({ node, children }) => <h5 data-source-line={node?.position?.start.line} onDoubleClick={jumpFromPreviewElement}>{children}</h5>,
-                h6: ({ node, children }) => <h6 data-source-line={node?.position?.start.line} onDoubleClick={jumpFromPreviewElement}>{children}</h6>,
-                p: ({ node, children }) => <p data-source-line={node?.position?.start.line} onDoubleClick={jumpFromPreviewElement}>{children}</p>,
-                li: ({ node, children }) => <li data-source-line={node?.position?.start.line} onDoubleClick={jumpFromPreviewElement}>{children}</li>,
-                blockquote: ({ node, children }) => <blockquote data-source-line={node?.position?.start.line} onDoubleClick={jumpFromPreviewElement}>{children}</blockquote>,
-                pre: ({ node, children }) => <pre data-source-line={node?.position?.start.line} onDoubleClick={jumpFromPreviewElement}>{children}</pre>,
-                div: ({ node, children }) => <div data-source-line={node?.position?.start.line} onDoubleClick={jumpFromPreviewElement}>{children}</div>,
-                img: ({ src, alt }) => {
-                  const resolved = resolveRelativeNotePath(path, src ?? '')
-                  const imageSource = /^(data:|blob:|https?:)/i.test(resolved)
-                    ? resolved
-                    : `vault:///asset?path=${encodeURIComponent(resolved)}`
-                  return <img src={imageSource} alt={alt ?? ''} />
-                },
-                code: ({ children, className }) => <code className={className}><Braces size={12} aria-hidden="true" />{children}</code>
-              }}
-            >
-              {renderableMarkdown(content)}
-            </ReactMarkdown>
+            <MarkdownBody path={path} content={previewContent} onWikiOpen={onWikiOpen} onSourceDoubleClick={jumpFromPreviewElement} />
           </article>
         )}
       </div>
