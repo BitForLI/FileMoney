@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
@@ -146,6 +146,7 @@ export function LocationMarkdown({ source, onDoubleClick }: { source: string; on
 export function EditorPane({ path, content, openDocuments, tree, recentPaths, mode, jumpLine, onModeChange, onChange, onWikiOpen, onOpenInPane, onAttach }: EditorPaneProps) {
   const textarea = useRef<HTMLTextAreaElement>(null)
   const contentRef = useRef(content)
+  const editorView = useRef({ path, start: 0, end: 0, scrollTop: 0 })
   const preview = useRef<HTMLElement>(null)
   const editorStage = useRef<HTMLDivElement>(null)
   const splitPointer = useRef<number | null>(null)
@@ -165,6 +166,18 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
   const [previewWidths, setPreviewWidths] = useState<number[]>([])
   const [previewPaths, setPreviewPaths] = useState(() => openDocuments.map((document) => document.path))
   useEffect(() => { contentRef.current = content }, [content])
+  useLayoutEffect(() => {
+    const element = textarea.current
+    if (!element) return
+    if (editorView.current.path !== path) {
+      editorView.current = { path, start: element.selectionStart, end: element.selectionEnd, scrollTop: element.scrollTop }
+      return
+    }
+    const start = Math.min(editorView.current.start, content.length)
+    const end = Math.min(editorView.current.end, content.length)
+    element.setSelectionRange(start, end)
+    element.scrollTop = editorView.current.scrollTop
+  }, [content, path])
   const openDocumentPaths = openDocuments.map((document) => document.path).join('\n')
   useEffect(() => {
     setPreviewPaths((current) => {
@@ -179,6 +192,15 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
       return Array.from({ length: visiblePreviewCount }, () => 1)
     })
   }, [visiblePreviewCount])
+
+  function rememberEditorView(element: HTMLTextAreaElement): void {
+    editorView.current = {
+      path,
+      start: element.selectionStart,
+      end: element.selectionEnd,
+      scrollTop: element.scrollTop
+    }
+  }
 
   function resizePreview(index: number, clientX: number): void {
     const bounds = editorStage.current?.getBoundingClientRect()
@@ -234,6 +256,7 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
       const lineHeight = Number.parseFloat(window.getComputedStyle(textarea.current).lineHeight) || 26
       const paddingTop = Number.parseFloat(window.getComputedStyle(textarea.current).paddingTop) || 0
       textarea.current.scrollTop = Math.max(0, (jumpLine - 1) * lineHeight + paddingTop)
+      rememberEditorView(textarea.current)
     }
     const frame = window.requestAnimationFrame(() => {
       const candidates = Array.from(preview.current?.querySelectorAll<HTMLElement>('[data-source-line]') ?? [])
@@ -438,11 +461,13 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
                 })
               }}
               onChange={(event) => {
+                rememberEditorView(event.currentTarget)
                 onChange(path, event.target.value)
                 setCursor(event.target.selectionStart)
               }}
-              onClick={(event) => setCursor(event.currentTarget.selectionStart)}
-              onKeyUp={(event) => setCursor(event.currentTarget.selectionStart)}
+              onClick={(event) => { rememberEditorView(event.currentTarget); setCursor(event.currentTarget.selectionStart) }}
+              onKeyUp={(event) => { rememberEditorView(event.currentTarget); setCursor(event.currentTarget.selectionStart) }}
+              onScroll={(event) => rememberEditorView(event.currentTarget)}
               onPaste={(event) => {
                 const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'))
                 if (images.length) {
