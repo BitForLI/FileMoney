@@ -12,7 +12,7 @@
 - 已实现 Markdown 编辑/预览、自动保存、多标签、搜索、双向链接、附件和主题设置。
 - 左栏采用自由层级：笔记、文件夹和分区都可直接创建在资料库根目录；笔记和文件夹可拖入分区或任意文件夹，也可拖回根目录。
 - 应用首次启动自动创建内置资料库，不要求用户选择本地目录。
-- 已配置 NSIS Windows 安装器，并通过 GitHub Actions 成功发布 `Pagefold v0.1.3` Windows x64 安装包。
+- 已配置 NSIS Windows 安装器，并通过 GitHub Actions 成功发布 `Pagefold v0.1.4` Windows x64 安装包。
 - 已将 Electron 不支持的原生 `prompt` 替换为应用内新建和重命名对话框。
 - 已移除创建说明、资料库副标题、空白页教程和右栏教程等提示性文案。
 - Markdown 编辑区和渲染预览区都已实现右键菜单：链接到文档、复制、剪切、粘贴、全选；预览选中文字会按出现位置映射回 Markdown 原文，链接选择器提供最近文档和搜索。
@@ -44,7 +44,8 @@
 - 点击左侧文件树空白区域会清除当前分区或文件夹选择；随后从顶部新建的笔记或文件夹位于资料库根目录，不属于任何分区。
 - 设置中可选择 OneDrive、Dropbox、Syncthing 等同步工具管理的任意本地文件夹作为资料库，也可恢复默认资料库；旧资料库不会自动搬移或删除。应用会监听外部新增、修改和删除并自动刷新，未保存的本地编辑不会被同步变化静默覆盖。
 - 修复通过具体行链接进入文档后，每次输入或删除都会重新触发行定位并导致编辑区光标跳动的问题。
-- 当前最新功能已包含在 GitHub Release `v0.1.3`；本地测试、生产构建和 GitHub Windows 构建均已通过。
+- 编辑区会在正文因自动保存或同步刷新时保留当前光标、选区和滚动位置，修复编辑过程中偶尔跳到文末的问题。
+- 当前最新功能已包含在 GitHub Release `v0.1.4`；本地测试、生产构建和 GitHub Windows 构建均已通过。
 
 ## 已确认决定
 
@@ -69,7 +70,7 @@
 | `src/renderer/src/components/FileTree.tsx` | 自由层级文件树和拖动分类 |
 | `src/renderer/src/components/EditorPane.tsx` | Markdown 编辑、右键菜单和链接选择器 |
 | `package.json` | 开发、测试和 Windows 打包配置 |
-| GitHub Release `v0.1.3` | Windows x64 安装包 `Pagefold-Setup-0.1.3.exe` |
+| GitHub Release `v0.1.4` | Windows x64 安装包 `Pagefold-Setup-0.1.4.exe` |
 
 ## 待解决问题
 
@@ -79,6 +80,6 @@
 
 ## 下一步
 
-1. 用户在 Windows 安装 `v0.1.3`，并在设置中把资料库切换到本地 OneDrive 同步文件夹。
+1. 用户在 Windows 安装 `v0.1.4`，并在设置中把资料库切换到本地 OneDrive 同步文件夹。
 2. 在第二台设备选择对应的本地 OneDrive 文件夹，验证跨设备同步。
 3. 后续版本考虑加入回收站和资料库导出/备份。
