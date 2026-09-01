@@ -18,7 +18,7 @@ Windows 默认资料库位于：
 
 Pagefold 可使用 OneDrive、Dropbox 或 Syncthing 已同步到本机的文件夹。推荐为 Pagefold 建立专用文件夹，并在每台设备上选择对应的本地同步目录。
 
-Pagefold 会监听同步工具在后台新增、修改或删除的 Markdown 文件并刷新界面。如果打开的文档同时存在尚未保存的本地修改，外部版本不会静默覆盖本地内容。
+Pagefold 会监听同步工具在后台新增、修改或删除的 Markdown 文件并刷新界面。如果打开的文档同时存在尚未保存的本地修改，Pagefold 会先把本地内容保存为同目录下的 `-local-conflict` 副本，再加载同步版本，避免任一版本被静默覆盖。
 
 使用 Syncthing 同步默认资料库时，两台 Windows 电脑都可以直接选择：
 
@@ -43,4 +43,4 @@ npm run build
 npm run dist:win
 ```
 
-Windows 安装包输出到 `release/Pagefold-Setup-0.1.0.exe`。
+Windows 安装包输出到 `release/Pagefold-Setup-<version>.exe`。

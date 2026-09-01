@@ -90,6 +90,8 @@ export default function App() {
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const saveVersions = useRef<Record<string, number>>({})
   const savePromises = useRef<Record<string, Promise<void> | undefined>>({})
+  const knownDiskContent = useRef<Record<string, string | undefined>>({})
+  const conflictedPaths = useRef(new Set<string>())
   const openingFiles = useRef<Record<string, Promise<string> | undefined>>({})
   const [saveErrors, setSaveErrors] = useState<Record<string, boolean>>({})
   const [backlinkRevision, setBacklinkRevision] = useState(0)
@@ -220,8 +222,8 @@ export default function App() {
   }, [rightPanelWidth])
 
   useEffect(() => {
-    setRightContextPath((current) => current && tabs.some((tab) => tab.path === current) ? current : activePath)
-  }, [tabs, activePath])
+    setRightContextPath(activePath)
+  }, [activePath])
 
   useEffect(() => {
     if (!rightContextPath) {
@@ -289,18 +291,32 @@ export default function App() {
       setWorkspace(nextWorkspace)
       setTree(nextWorkspace.tree)
       let conflictCount = 0
+      const conflictCopies: string[] = []
       let removedCount = 0
       const reconciled = (await Promise.all(tabsRef.current.map(async (tab) => {
         try {
           const diskContent = await window.pagefold.readFile(tab.path)
           if (diskContent === tab.savedContent) return tab
-          if (tab.content === tab.savedContent) return { ...tab, content: diskContent, savedContent: diskContent }
+          if (diskContent === knownDiskContent.current[tab.path]) return { ...tab, savedContent: diskContent }
+          if (tab.content === tab.savedContent) {
+            knownDiskContent.current[tab.path] = diskContent
+            return { ...tab, content: diskContent, savedContent: diskContent }
+          }
           clearTimeout(saveTimers.current[tab.path])
           delete saveTimers.current[tab.path]
           saveVersions.current[tab.path] = (saveVersions.current[tab.path] ?? 0) + 1
-          setSaveErrors((current) => ({ ...current, [tab.path]: true }))
-          conflictCount += 1
-          return tab
+          try {
+            conflictCopies.push(await window.pagefold.saveConflictCopy(tab.path, tab.content))
+            conflictedPaths.current.delete(tab.path)
+            knownDiskContent.current[tab.path] = diskContent
+            setSaveErrors((current) => ({ ...current, [tab.path]: false }))
+            return { ...tab, content: diskContent, savedContent: diskContent }
+          } catch {
+            conflictedPaths.current.add(tab.path)
+            setSaveErrors((current) => ({ ...current, [tab.path]: true }))
+            conflictCount += 1
+            return tab
+          }
         } catch {
           if (tab.content !== tab.savedContent) {
             conflictCount += 1
@@ -314,7 +330,8 @@ export default function App() {
       setTabs(reconciled)
       setActivePath((current) => current && reconciled.some((tab) => tab.path === current) ? current : reconciled[0]?.path ?? null)
       setBacklinkRevision((current) => current + 1)
-      if (conflictCount) notify(`${conflictCount} open ${conflictCount === 1 ? 'note has' : 'notes have'} local edits and was not overwritten by a synced change.`)
+      if (conflictCount) notify(`${conflictCount} local ${conflictCount === 1 ? 'edit could' : 'edits could'} not be saved as a conflict copy.`)
+      else if (conflictCopies.length) notify(`Saved local edits as ${conflictCopies.length} conflict ${conflictCopies.length === 1 ? 'copy' : 'copies'} and loaded the synced version.`)
       else if (removedCount) notify(`${removedCount} open ${removedCount === 1 ? 'note was' : 'notes were'} removed by external sync.`)
     } catch {
       notify('Could not refresh changes from the sync folder.')
@@ -340,10 +357,15 @@ export default function App() {
   }
 
   async function persistContent(path: string, content: string, version: number): Promise<boolean> {
-    const operation = window.pagefold.writeFile(path, content)
+    const previous = savePromises.current[path]
+    const savedContent = tabsRef.current.find((tab) => tab.path === path)?.savedContent
+    const operation = (previous ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => window.pagefold.writeFile(path, content, knownDiskContent.current[path] ?? savedContent))
     savePromises.current[path] = operation
     try {
       await operation
+      knownDiskContent.current[path] = content
       if (saveVersions.current[path] === version) {
         setTabs((current) => current.map((tab) => tab.path === path ? { ...tab, savedContent: content } : tab))
         setSaveErrors((current) => ({ ...current, [path]: false }))
@@ -360,6 +382,7 @@ export default function App() {
   }
 
   async function flushPath(path: string): Promise<boolean> {
+    if (conflictedPaths.current.has(path)) return false
     clearTimeout(saveTimers.current[path])
     delete saveTimers.current[path]
     if (savePromises.current[path]) await savePromises.current[path]?.catch(() => undefined)
@@ -510,8 +533,12 @@ export default function App() {
 
   function updateContent(path: string, content: string): void {
     setTabs((current) => current.map((tab) => tab.path === path ? { ...tab, content } : tab))
-    setSaveErrors((current) => ({ ...current, [path]: false }))
     clearTimeout(saveTimers.current[path])
+    if (conflictedPaths.current.has(path)) {
+      setSaveErrors((current) => ({ ...current, [path]: true }))
+      return
+    }
+    setSaveErrors((current) => ({ ...current, [path]: false }))
     const version = (saveVersions.current[path] ?? 0) + 1
     saveVersions.current[path] = version
     saveTimers.current[path] = setTimeout(async () => {

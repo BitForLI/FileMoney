@@ -46,7 +46,8 @@ export interface WorkspaceApi {
   useDefaultWorkspace: () => Promise<WorkspaceSnapshot>
   refreshTree: () => Promise<TreeEntry[]>
   readFile: (relativePath: string) => Promise<string>
-  writeFile: (relativePath: string, content: string) => Promise<void>
+  writeFile: (relativePath: string, content: string, expectedContent?: string) => Promise<void>
+  saveConflictCopy: (relativePath: string, content: string) => Promise<string>
   createEntry: (parentPath: string, type: EntryType, name: string) => Promise<string>
   renameEntry: (relativePath: string, newName: string) => Promise<string>
   moveEntry: (sourcePath: string, targetFolder: string) => Promise<string>

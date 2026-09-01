@@ -1,4 +1,4 @@
-import { memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, startTransition, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
@@ -204,11 +204,13 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
   const textarea = useRef<HTMLTextAreaElement>(null)
   const contentRef = useRef(content)
   const previewContent = useDeferredValue(content)
-  const editorView = useRef({ path, start: 0, end: 0, scrollTop: 0 })
+  const editorPath = useRef(path)
+  const editorViews = useRef(new Map<string, { start: number; end: number; scrollTop: number }>())
   const preview = useRef<HTMLElement>(null)
   const editorStage = useRef<HTMLDivElement>(null)
   const splitPointer = useRef<number | null>(null)
   const previewPointer = useRef<{ id: number; index: number } | null>(null)
+  const linkLocationRequest = useRef(0)
   const [cursor, setCursor] = useState(0)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [linkSelection, setLinkSelection] = useState<(SelectionRange & { selectedText: string }) | null>(null)
@@ -223,19 +225,31 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
   const [splitDragging, setSplitDragging] = useState(false)
   const [previewWidths, setPreviewWidths] = useState<number[]>([])
   const [previewPaths, setPreviewPaths] = useState(() => openDocuments.map((document) => document.path))
-  useEffect(() => { contentRef.current = content }, [content])
   useLayoutEffect(() => {
     const element = textarea.current
     if (!element) return
-    if (editorView.current.path !== path) {
-      editorView.current = { path, start: element.selectionStart, end: element.selectionEnd, scrollTop: element.scrollTop }
+    if (editorPath.current !== path) {
+      editorViews.current.set(editorPath.current, {
+        start: element.selectionStart,
+        end: element.selectionEnd,
+        scrollTop: element.scrollTop
+      })
+      editorPath.current = path
+      contentRef.current = content
+      element.value = content
+      const view = editorViews.current.get(path) ?? { start: 0, end: 0, scrollTop: 0 }
+      element.setSelectionRange(Math.min(view.start, content.length), Math.min(view.end, content.length))
+      element.scrollTop = view.scrollTop
       return
     }
-    const start = Math.min(editorView.current.start, content.length)
-    const end = Math.min(editorView.current.end, content.length)
-    element.setSelectionRange(start, end)
-    element.scrollTop = editorView.current.scrollTop
-  }, [content, path])
+    if (contentRef.current === content) return
+    const view = { start: element.selectionStart, end: element.selectionEnd, scrollTop: element.scrollTop }
+    contentRef.current = content
+    element.value = content
+    element.setSelectionRange(Math.min(view.start, content.length), Math.min(view.end, content.length))
+    element.scrollTop = view.scrollTop
+    editorViews.current.set(path, view)
+  }, [content, mode, path])
   const openDocumentPaths = openDocuments.map((document) => document.path).join('\n')
   useEffect(() => {
     setPreviewPaths((current) => {
@@ -252,12 +266,24 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
   }, [visiblePreviewCount])
 
   function rememberEditorView(element: HTMLTextAreaElement): void {
-    editorView.current = {
-      path,
+    editorViews.current.set(path, {
       start: element.selectionStart,
       end: element.selectionEnd,
       scrollTop: element.scrollTop
+    })
+  }
+
+  function commitEditorContent(next: string, nextCursor: number): void {
+    const element = textarea.current
+    contentRef.current = next
+    if (element) {
+      element.value = next
+      element.focus()
+      element.setSelectionRange(nextCursor, nextCursor)
+      rememberEditorView(element)
     }
+    setCursor(nextCursor)
+    startTransition(() => onChange(path, next))
   }
 
   function resizePreview(index: number, clientX: number): void {
@@ -281,7 +307,7 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
     })
     onOpenInPane(droppedPath, pane)
   }
-  const wikiMatch = findWikiMatch(content, cursor)
+  const wikiMatch = findWikiMatch(contentRef.current, cursor)
   const notes = useMemo(() => flattenMarkdownFiles(tree), [tree])
   const suggestions = wikiMatch
     ? notes.filter((note) => note.path !== path && note.name.toLocaleLowerCase().includes(wikiMatch.query.toLocaleLowerCase())).slice(0, 7)
@@ -358,14 +384,10 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
   }
 
   function replaceRange(range: SelectionRange, text: string): void {
-    const next = `${content.slice(0, range.start)}${text}${content.slice(range.end)}`
+    const currentContent = contentRef.current
+    const next = `${currentContent.slice(0, range.start)}${text}${currentContent.slice(range.end)}`
     const nextCursor = range.start + text.length
-    onChange(path, next)
-    requestAnimationFrame(() => {
-      textarea.current?.focus()
-      textarea.current?.setSelectionRange(nextCursor, nextCursor)
-      setCursor(nextCursor)
-    })
+    commitEditorContent(next, nextCursor)
   }
 
   async function copyContextSelection(menu: ContextMenuState): Promise<void> {
@@ -388,11 +410,12 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
     }
     textarea.current?.focus()
     textarea.current?.select()
-    setCursor(content.length)
+    setCursor(contentRef.current.length)
     setContextMenu(null)
   }
 
   function closeLinkPicker(): void {
+    linkLocationRequest.current += 1
     setLinkSelection(null)
     setLinkTargetNote(null)
     setLinkLocations([])
@@ -420,16 +443,18 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
   }
 
   async function chooseLinkDocument(note: TreeEntry): Promise<void> {
+    const request = ++linkLocationRequest.current
     setLinkTargetNote(note)
     setLinkQuery('')
     setLinkLocations([])
     setLinkLocationsBusy(true)
     try {
-      setLinkLocations(extractDocumentLocations(await window.pagefold.readFile(note.path)))
+      const locations = extractDocumentLocations(await window.pagefold.readFile(note.path))
+      if (linkLocationRequest.current === request) setLinkLocations(locations)
     } catch {
-      setLinkLocations([])
+      if (linkLocationRequest.current === request) setLinkLocations([])
     } finally {
-      setLinkLocationsBusy(false)
+      if (linkLocationRequest.current === request) setLinkLocationsBusy(false)
     }
   }
 
@@ -455,24 +480,13 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
     const end = element?.selectionEnd ?? start
     const insertion = attachments.join('\n')
     const next = `${currentContent.slice(0, start)}${insertion}${currentContent.slice(end)}`
-    onChange(path, next)
-    requestAnimationFrame(() => {
-      const nextCursor = start + insertion.length
-      element?.focus()
-      element?.setSelectionRange(nextCursor, nextCursor)
-      setCursor(nextCursor)
-    })
+    commitEditorContent(next, start + insertion.length)
   }
 
   function chooseSuggestion(target: string): void {
     if (!wikiMatch) return
-    const result = insertWikiTarget(content, wikiMatch, target.replace(/\.md$/i, ''))
-    onChange(path, result.content)
-    requestAnimationFrame(() => {
-      textarea.current?.focus()
-      textarea.current?.setSelectionRange(result.cursor, result.cursor)
-      setCursor(result.cursor)
-    })
+    const result = insertWikiTarget(contentRef.current, wikiMatch, target.replace(/\.md$/i, ''))
+    commitEditorContent(result.content, result.cursor)
   }
 
   return (
@@ -498,14 +512,14 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
           <div className="source-wrap">
             <textarea
               ref={textarea}
-              value={content}
+              defaultValue={content}
               spellCheck={false}
               aria-label="Markdown editor"
               onContextMenu={(event) => {
                 event.preventDefault()
                 const selectionStart = event.currentTarget.selectionStart
                 const selectionEnd = event.currentTarget.selectionEnd
-                const linkedRange = findDocumentLinkAtOffset(content, selectionStart)
+                const linkedRange = findDocumentLinkAtOffset(contentRef.current, selectionStart)
                 const existingLink = Boolean(linkedRange && selectionEnd <= linkedRange.end)
                 const position = contextMenuPosition(event.clientX, event.clientY, existingLink)
                 setContextMenu({
@@ -519,12 +533,21 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
                 })
               }}
               onChange={(event) => {
+                const next = event.currentTarget.value
+                const nextCursor = event.currentTarget.selectionStart
+                contentRef.current = next
                 rememberEditorView(event.currentTarget)
-                onChange(path, event.target.value)
-                setCursor(event.target.selectionStart)
+                startTransition(() => {
+                  setCursor(nextCursor)
+                  onChange(path, next)
+                })
               }}
               onClick={(event) => { rememberEditorView(event.currentTarget); setCursor(event.currentTarget.selectionStart) }}
-              onKeyUp={(event) => { rememberEditorView(event.currentTarget); setCursor(event.currentTarget.selectionStart) }}
+              onKeyUp={(event) => {
+                const nextCursor = event.currentTarget.selectionStart
+                rememberEditorView(event.currentTarget)
+                startTransition(() => setCursor(nextCursor))
+              }}
               onScroll={(event) => rememberEditorView(event.currentTarget)}
               onPaste={(event) => {
                 const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'))
@@ -662,7 +685,7 @@ export function EditorPane({ path, content, openDocuments, tree, recentPaths, mo
         <div className="link-picker-backdrop" onMouseDown={closeLinkPicker}>
           <section className="link-picker" role="dialog" aria-modal="true" aria-label="Link to document" onMouseDown={(event) => event.stopPropagation()}>
             <div className="link-picker-search">
-              {linkTargetNote && <button className="link-picker-back" onClick={() => { setLinkTargetNote(null); setLinkLocations([]); setLinkQuery('') }} aria-label="Back to documents"><ChevronLeft size={16} /></button>}
+              {linkTargetNote && <button className="link-picker-back" onClick={() => { linkLocationRequest.current += 1; setLinkTargetNote(null); setLinkLocations([]); setLinkLocationsBusy(false); setLinkQuery('') }} aria-label="Back to documents"><ChevronLeft size={16} /></button>}
               <Search size={15} />
               <input
                 autoFocus

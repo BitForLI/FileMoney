@@ -90,8 +90,11 @@ function startWorkspaceWatcher(): void {
     workspaceWatcher = watch(root, { recursive: true }, (_event, fileName) => {
       const normalized = String(fileName ?? '').replaceAll('\\', '/')
       if (normalized.split('/').some((part) => IGNORED_FOLDERS.has(part))) return
-      if (workspaceChangeTimer) clearTimeout(workspaceChangeTimer)
-      workspaceChangeTimer = setTimeout(broadcastWorkspaceChanged, 650)
+      if (workspaceChangeTimer) return
+      workspaceChangeTimer = setTimeout(() => {
+        workspaceChangeTimer = null
+        broadcastWorkspaceChanged()
+      }, 120)
     })
     workspaceWatcher.on('error', () => {
       workspaceWatcher?.close()
@@ -280,8 +283,6 @@ function createWindow(): void {
       sandbox: true
     }
   })
-  let closeFallback: ReturnType<typeof setTimeout> | null = null
-
   window.once('ready-to-show', () => window.show())
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) void shell.openExternal(url)
@@ -297,14 +298,7 @@ function createWindow(): void {
     if (closeReadyWindows.has(window) || window.webContents.isDestroyed()) return
     event.preventDefault()
     window.webContents.send('window:prepare-close')
-    if (!closeFallback) {
-      closeFallback = setTimeout(() => {
-        closeReadyWindows.add(window)
-        window.close()
-      }, 5000)
-    }
   })
-  window.on('closed', () => { if (closeFallback) clearTimeout(closeFallback) })
   if (process.env.ELECTRON_RENDERER_URL) window.loadURL(process.env.ELECTRON_RENDERER_URL)
   else window.loadFile(path.join(__dirname, '../renderer/index.html'))
 }
@@ -329,16 +323,27 @@ function registerIpc(): void {
     if (!TEXT_EXTENSIONS.has(path.extname(absolute).toLowerCase())) throw new Error('Only Markdown and text files can be edited')
     return fs.readFile(absolute, 'utf8')
   })
-  ipcMain.handle('file:write', async (_event, relativePath: string, content: string) => {
+  ipcMain.handle('file:write', async (_event, relativePath: string, content: string, expectedContent?: string) => {
     const absolute = resolveInWorkspace(relativePath)
     if (!TEXT_EXTENSIONS.has(path.extname(absolute).toLowerCase())) throw new Error('Only Markdown and text files can be edited')
+    if (expectedContent !== undefined && await fs.readFile(absolute, 'utf8') !== expectedContent) {
+      throw new Error('The file changed outside Pagefold')
+    }
     const handle = await fs.open(absolute, 'r+')
     try {
-      await handle.truncate(0)
       await handle.writeFile(content, 'utf8')
+      await handle.truncate(Buffer.byteLength(content, 'utf8'))
     } finally {
       await handle.close()
     }
+  })
+  ipcMain.handle('file:save-conflict-copy', async (_event, relativePath: string, content: string) => {
+    const absolute = resolveInWorkspace(relativePath)
+    const parsed = path.parse(absolute)
+    if (!TEXT_EXTENSIONS.has(parsed.ext.toLowerCase())) throw new Error('Only Markdown and text files can be edited')
+    const destination = await availableDestination(parsed.dir, `${parsed.name}-local-conflict${parsed.ext}`)
+    await fs.writeFile(destination, content, { encoding: 'utf8', flag: 'wx' })
+    return normalizeRelative(path.relative(requireWorkspace(), destination))
   })
   ipcMain.handle('entry:create', async (_event, parentPath: string, type: EntryType, requestedName: string) => {
     if (!['file', 'folder', 'section'].includes(type)) throw new Error('Invalid entry type')
