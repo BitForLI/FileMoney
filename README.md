@@ -1,41 +1,31 @@
 # Pagefold
 
-Pagefold 是一款轻量 Markdown 桌面应用。笔记、文件夹和分区均可直接创建，并通过拖动自由分类；资料库由应用自动管理，不要求用户选择本地工作区。
+Pagefold is a small desktop Markdown editor built for people who prefer ordinary files over a proprietary notes database. Notes and folders can be created in the app, reorganised by drag and drop, and opened in any other Markdown tool.
 
-## 数据位置
+## What it does
 
-Windows 默认资料库位于：
+- Edits local Markdown files in a focused desktop interface.
+- Organises notes into folders and sections without changing the file format.
+- Watches the library for changes made by OneDrive, Dropbox, or Syncthing.
+- Preserves unsaved local edits as a `-local-conflict` copy when a synced version arrives.
+- Keeps the user's library after the application is uninstalled.
 
-```text
-%APPDATA%\pagefold\vault
-```
-
-卸载应用时默认保留资料库，重新安装后可以继续使用。
-
-也可以在 **Settings → Library location → Choose folder** 中选择任意本地资料库目录。Pagefold 不会自动搬移或删除旧资料库。
-
-## 多设备同步
-
-Pagefold 可使用 OneDrive、Dropbox 或 Syncthing 已同步到本机的文件夹。推荐为 Pagefold 建立专用文件夹，并在每台设备上选择对应的本地同步目录。
-
-Pagefold 会监听同步工具在后台新增、修改或删除的 Markdown 文件并刷新界面。如果打开的文档同时存在尚未保存的本地修改，Pagefold 会先把本地内容保存为同目录下的 `-local-conflict` 副本，再加载同步版本，避免任一版本被静默覆盖。
-
-使用 Syncthing 同步默认资料库时，两台 Windows 电脑都可以直接选择：
+The default Windows library is stored at:
 
 ```text
 %APPDATA%\pagefold\vault
 ```
 
-避免在两台设备上同时编辑同一个文档，并在切换设备前等待同步工具显示同步完成。
+A different local folder can be selected under **Settings > Library location**. Pagefold never moves or deletes the previous library automatically.
 
-## 本地开发
+## Development
 
 ```powershell
 npm install
 npm run dev
 ```
 
-## 验证与打包
+Run the checks and create a Windows installer with:
 
 ```powershell
 npm test
@@ -43,4 +33,8 @@ npm run build
 npm run dist:win
 ```
 
-Windows 安装包输出到 `release/Pagefold-Setup-<version>.exe`。
+The installer is written to `release/Pagefold-Setup-<version>.exe`.
+
+## Stack
+
+Electron, React, TypeScript, Vite, Vitest, and electron-builder.
