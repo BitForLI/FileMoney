@@ -1,4 +1,4 @@
-# Pagefold
+# Pagefold — Local-First Markdown Notes
 
 Pagefold is a small desktop Markdown editor built for people who prefer ordinary files over a proprietary notes database. Notes and folders can be created in the app, reorganised by drag and drop, and opened in any other Markdown tool.
 
