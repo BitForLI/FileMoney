@@ -3,6 +3,7 @@ import { watch, type FSWatcher } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createLibraryBackup } from './libraryBackup'
 import type {
   AttachmentInput,
   AttachmentResult,
@@ -317,6 +318,17 @@ function registerIpc(): void {
     return switchWorkspace(result.filePaths[0])
   })
   ipcMain.handle('workspace:use-default', () => switchWorkspace(defaultWorkspaceRoot()))
+  ipcMain.handle('workspace:backup', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const options: OpenDialogOptions = {
+      title: 'Choose where to save a copy of your Pagefold library',
+      buttonLabel: 'Create backup here',
+      properties: ['openDirectory', 'createDirectory']
+    }
+    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+    if (result.canceled || !result.filePaths[0]) return null
+    return createLibraryBackup(requireWorkspace(), result.filePaths[0])
+  })
   ipcMain.handle('tree:refresh', async () => readTree(requireWorkspace()))
   ipcMain.handle('file:read', async (_event, relativePath: string) => {
     const absolute = resolveInWorkspace(relativePath)

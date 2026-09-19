@@ -5,6 +5,7 @@ const api: WorkspaceApi = {
   getWorkspace: () => ipcRenderer.invoke('workspace:get'),
   chooseWorkspaceFolder: () => ipcRenderer.invoke('workspace:choose-folder'),
   useDefaultWorkspace: () => ipcRenderer.invoke('workspace:use-default'),
+  backupWorkspace: () => ipcRenderer.invoke('workspace:backup'),
   refreshTree: () => ipcRenderer.invoke('tree:refresh'),
   readFile: (relativePath) => ipcRenderer.invoke('file:read', relativePath),
   writeFile: (relativePath, content, expectedContent) => ipcRenderer.invoke('file:write', relativePath, content, expectedContent),

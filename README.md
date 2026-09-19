@@ -20,6 +20,7 @@ The main product decision is simple: Pagefold manages the editing experience, no
 - Organises notes into folders and sections without changing the file format.
 - Watches local library changes, including files updated by a separate sync tool such as OneDrive, Dropbox, or Syncthing; Pagefold does not provide its own cloud sync.
 - Saves unsaved local edits as a `-local-conflict` copy when it detects a changed disk version during reconciliation.
+- Creates an on-demand, dated backup of the whole library—including attachments—in a folder outside the library. Open notes are saved before copying.
 - Keeps the user's library after the application is uninstalled.
 
 The default Windows library is stored at:
@@ -29,6 +30,8 @@ The default Windows library is stored at:
 ```
 
 A different local folder can be selected under **Settings > Library location**. Pagefold never moves or deletes the previous library automatically.
+Use **Settings > Create backup** to make a separate local copy; Pagefold does not upload it or schedule automatic backups.
+The copy is not an atomic snapshot: if another program changes files during the copy, run the backup again after sync settles.
 
 ## Implementation references
 

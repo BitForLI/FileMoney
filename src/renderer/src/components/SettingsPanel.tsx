@@ -1,4 +1,4 @@
-import { FolderSync, Moon, RotateCcw, Sun, X } from 'lucide-react'
+import { Archive, FolderSync, Moon, RotateCcw, Sun, X } from 'lucide-react'
 
 export interface AppSettings {
   theme: 'light' | 'dark'
@@ -10,13 +10,16 @@ interface SettingsPanelProps {
   settings: AppSettings
   workspacePath: string
   workspaceBusy: boolean
+  backupBusy: boolean
+  lastBackupPath: string | null
   onChange: (settings: AppSettings) => void
   onChooseWorkspace: () => void
   onUseDefaultWorkspace: () => void
+  onBackupWorkspace: () => void
   onClose: () => void
 }
 
-export function SettingsPanel({ settings, workspacePath, workspaceBusy, onChange, onChooseWorkspace, onUseDefaultWorkspace, onClose }: SettingsPanelProps) {
+export function SettingsPanel({ settings, workspacePath, workspaceBusy, backupBusy, lastBackupPath, onChange, onChooseWorkspace, onUseDefaultWorkspace, onBackupWorkspace, onClose }: SettingsPanelProps) {
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <section className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
@@ -29,9 +32,20 @@ export function SettingsPanel({ settings, workspacePath, workspaceBusy, onChange
           <p>Choose a local folder managed by OneDrive, Dropbox, or Syncthing. Existing libraries are not moved or deleted.</p>
           <code title={workspacePath}>{workspacePath}</code>
           <div className="library-location-actions">
-            <button disabled={workspaceBusy} onClick={onChooseWorkspace}><FolderSync size={15} />Choose folder</button>
-            <button disabled={workspaceBusy} onClick={onUseDefaultWorkspace}><RotateCcw size={14} />Use default</button>
+            <button disabled={workspaceBusy || backupBusy} onClick={onChooseWorkspace}><FolderSync size={15} />Choose folder</button>
+            <button disabled={workspaceBusy || backupBusy} onClick={onUseDefaultWorkspace}><RotateCcw size={14} />Use default</button>
           </div>
+        </div>
+        <div className="setting-group backup-setting">
+          <div className="backup-setting-header">
+            <div><span className="eyebrow">YOUR FILES</span><h3>Keep a spare copy.</h3></div>
+            <Archive size={22} aria-hidden="true" />
+          </div>
+          <p>Copy the full library, including attachments, to a folder you choose. Unsaved notes are saved first.</p>
+          <button disabled={workspaceBusy || backupBusy} onClick={onBackupWorkspace}>
+            <Archive size={15} />{backupBusy ? 'Creating backup…' : 'Create backup'}
+          </button>
+          {lastBackupPath && <div className="backup-result" role="status"><span>Last backup saved to</span><code title={lastBackupPath}>{lastBackupPath}</code></div>}
         </div>
         <div className="setting-group">
           <label>Theme</label>

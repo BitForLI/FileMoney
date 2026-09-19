@@ -83,6 +83,8 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
+  const [backupBusy, setBackupBusy] = useState(false)
+  const [lastBackupPath, setLastBackupPath] = useState<string | null>(null)
   const [toast, setToast] = useState('')
   const [nameDialog, setNameDialog] = useState<NameDialogState | null>(null)
   const [dialogBusy, setDialogBusy] = useState(false)
@@ -347,12 +349,32 @@ export default function App() {
         : await window.pagefold.useDefaultWorkspace()
       if (!next) return
       await activateWorkspace(next)
+      setLastBackupPath(null)
       setSaveErrors({})
       notify(source === 'folder' ? 'Library folder changed.' : 'Default library restored.')
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Could not change the library folder.')
     } finally {
       setWorkspaceBusy(false)
+    }
+  }
+
+  async function backupWorkspace(): Promise<void> {
+    if (!await flushAllTabs()) {
+      notify('Save your open notes before creating a backup.')
+      return
+    }
+    setBackupBusy(true)
+    try {
+      const backupPath = await window.pagefold.backupWorkspace()
+      if (backupPath) {
+        setLastBackupPath(backupPath)
+        notify('Library backup created.')
+      }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not create the library backup.')
+    } finally {
+      setBackupBusy(false)
     }
   }
 
@@ -744,7 +766,7 @@ export default function App() {
         )}
       </aside>
 
-      {settingsOpen && <SettingsPanel settings={settings} workspacePath={workspace.rootPath} workspaceBusy={workspaceBusy} onChange={setSettings} onChooseWorkspace={() => void changeWorkspace('folder')} onUseDefaultWorkspace={() => void changeWorkspace('default')} onClose={() => { if (!workspaceBusy) setSettingsOpen(false) }} />}
+      {settingsOpen && <SettingsPanel settings={settings} workspacePath={workspace.rootPath} workspaceBusy={workspaceBusy} backupBusy={backupBusy} lastBackupPath={lastBackupPath} onChange={setSettings} onChooseWorkspace={() => void changeWorkspace('folder')} onUseDefaultWorkspace={() => void changeWorkspace('default')} onBackupWorkspace={() => void backupWorkspace()} onClose={() => { if (!workspaceBusy && !backupBusy) setSettingsOpen(false) }} />}
       {searchOpen && (
         <div className="modal-backdrop search-dialog-backdrop" onMouseDown={() => setSearchOpen(false)}>
           <section className="search-dialog" role="dialog" aria-modal="true" aria-label="Search library" onMouseDown={(event) => event.stopPropagation()}>

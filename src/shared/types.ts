@@ -44,6 +44,7 @@ export interface WorkspaceApi {
   getWorkspace: () => Promise<WorkspaceSnapshot | null>
   chooseWorkspaceFolder: () => Promise<WorkspaceSnapshot | null>
   useDefaultWorkspace: () => Promise<WorkspaceSnapshot>
+  backupWorkspace: () => Promise<string | null>
   refreshTree: () => Promise<TreeEntry[]>
   readFile: (relativePath: string) => Promise<string>
   writeFile: (relativePath: string, content: string, expectedContent?: string) => Promise<void>
