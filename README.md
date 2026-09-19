@@ -2,6 +2,18 @@
 
 Pagefold is a small desktop Markdown editor built for people who prefer ordinary files over a proprietary notes database. Notes and folders can be created in the app, reorganised by drag and drop, and opened in any other Markdown tool.
 
+## Product at a glance
+
+| | |
+| --- | --- |
+| **Users** | People who want a focused notes app without locking their writing into one service |
+| **Problem** | Local Markdown is portable, but raw folders provide a poor writing and organisation experience |
+| **Core experience** | Write, preview, search, link, and organise ordinary `.md` files in a desktop app |
+| **Ownership model** | The user chooses the library folder and keeps it after uninstalling Pagefold |
+| **Conflict behaviour** | External changes never silently replace unsaved work; Pagefold first creates a conflict copy |
+
+The main product decision is simple: Pagefold manages the editing experience, not ownership of the content. Cloud synchronisation is optional and remains the responsibility of tools such as OneDrive, Dropbox, or Syncthing.
+
 ## What it does
 
 - Edits local Markdown files in a focused desktop interface.
